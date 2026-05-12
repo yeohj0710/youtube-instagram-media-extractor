@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import threading
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, font as tkfont, messagebox
 import tkinter as tk
@@ -19,6 +21,37 @@ PRODUCT_NAME = "YouTube·Instagram 미디어 추출기"
 OUTPUT_FORMAT_CHOICES = ["MP3", "MP4"]
 QUALITY_CHOICES = ["128", "192", "256", "320"]
 BROWSER_CHOICES = ["chrome", "edge", "firefox", "brave", "whale"]
+URL_RE = re.compile(r"https?://[^\s<>'\"`]+", re.IGNORECASE)
+TRAILING_URL_CHARS = ".,;:!?)]}…"
+
+
+@dataclass
+class QueuedJob:
+    id: int
+    url: str
+    settings: AppSettings
+    output_format: str
+    status: str = "queued"
+    message: str = "대기 중"
+    progress: float = 0.0
+    result: DownloadResult | None = None
+    error: str = ""
+
+
+def extract_urls(text: str) -> list[str]:
+    urls = [match.rstrip(TRAILING_URL_CHARS) for match in URL_RE.findall(text)]
+    if not urls:
+        candidate = text.strip().rstrip(TRAILING_URL_CHARS)
+        if candidate.lower().startswith(("http://", "https://")):
+            urls = [candidate]
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        if url not in seen:
+            deduped.append(url)
+            seen.add(url)
+    return deduped
 
 
 class ActivitySpinner(tk.Canvas):
@@ -83,16 +116,18 @@ class YouTubeInstagramMediaApp(ctk.CTk):
 
         self.title(PRODUCT_NAME)
         self._set_window_icon()
-        self.geometry("1020x720")
-        self.minsize(900, 660)
+        self.geometry("1100x740")
+        self.minsize(940, 660)
 
         self.settings = load_settings()
         self.worker_thread: threading.Thread | None = None
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.latest_result: DownloadResult | None = None
+        self.queue_items: list[QueuedJob] = []
+        self.current_job: QueuedJob | None = None
+        self.next_job_id = 1
         self.is_processing = False
 
-        self.url_var = tk.StringVar()
         self.output_dir_var = tk.StringVar(value=self.settings.output_dir or str(default_output_dir()))
         self.output_format_var = tk.StringVar(value=str(self.settings.output_format or "MP3").upper())
         self.quality_var = tk.StringVar(value=str(self.settings.audio_quality or "192"))
@@ -124,6 +159,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.font_button = ctk.CTkFont(family=self.font_family, size=14, weight="bold")
         self.font_input = ctk.CTkFont(family=self.font_family, size=14)
         self.font_log = ctk.CTkFont(family=self.font_family, size=13)
+        self.font_small = ctk.CTkFont(family=self.font_family, size=12)
 
     def _set_window_icon(self) -> None:
         icon_path = resource_path("assets", "youtube-instagram-media.ico")
@@ -169,14 +205,21 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         body.grid_columnconfigure(1, weight=2)
         body.grid_rowconfigure(0, weight=1)
 
-        left = ctk.CTkFrame(body, fg_color="#edf1f6", corner_radius=0)
+        left = ctk.CTkScrollableFrame(
+            body,
+            fg_color="#edf1f6",
+            corner_radius=0,
+            scrollbar_button_color="#cbd5e1",
+            scrollbar_button_hover_color="#94a3b8",
+        )
         left.grid(row=0, column=0, sticky="nsew", padx=(24, 12), pady=24)
         left.grid_columnconfigure(0, weight=1)
 
         right = ctk.CTkFrame(body, fg_color="#ffffff", corner_radius=10)
         right.grid(row=0, column=1, sticky="nsew", padx=(12, 24), pady=24)
         right.grid_columnconfigure(0, weight=1)
-        right.grid_rowconfigure(3, weight=1)
+        right.grid_rowconfigure(4, weight=2)
+        right.grid_rowconfigure(6, weight=1)
 
         self._link_card(left).grid(row=0, column=0, sticky="ew", pady=(0, 14))
         self._output_card(left).grid(row=1, column=0, sticky="ew", pady=(0, 14))
@@ -184,6 +227,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self._status_panel(right)
         self._refresh_format_mode()
         self._refresh_cookie_mode()
+        self._refresh_queue()
 
     def _card(self, parent: ctk.CTkBaseClass, title: str) -> ctk.CTkFrame:
         card = ctk.CTkFrame(parent, fg_color="#ffffff", corner_radius=10)
@@ -192,7 +236,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         label.grid(row=0, column=0, padx=22, pady=(20, 12), sticky="w")
         return card
 
-    def _helper_label(self, parent: ctk.CTkBaseClass, text: str, row: int) -> ctk.CTkLabel:
+    def _helper_label(self, parent: ctk.CTkBaseClass, text: str, row: int, wraplength: int = 430) -> ctk.CTkLabel:
         label = ctk.CTkLabel(
             parent,
             text=text,
@@ -200,33 +244,39 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             text_color="#64748b",
             justify="left",
             anchor="w",
-            wraplength=520,
+            wraplength=wraplength,
         )
         label.grid(row=row, column=0, padx=22, pady=(0, 12), sticky="ew")
         return label
 
     def _link_card(self, parent: ctk.CTkBaseClass) -> ctk.CTkFrame:
         card = self._card(parent, "1. 링크")
-        self._helper_label(card, "YouTube 영상/Shorts 또는 Instagram 릴스/게시물 링크를 그대로 넣으면 됩니다.", 1)
+        self._helper_label(card, "YouTube 영상/Shorts 또는 Instagram 릴스/게시물 링크를 넣어 주세요. 여러 개는 줄마다 하나씩 넣으면 됩니다.", 1)
 
         input_box = ctk.CTkFrame(card, fg_color="#f6f8fb", corner_radius=8)
         input_box.grid(row=2, column=0, padx=22, pady=(0, 18), sticky="ew")
         input_box.grid_columnconfigure(0, weight=1)
 
-        self.url_entry = ctk.CTkEntry(
+        self.url_text = ctk.CTkTextbox(
             input_box,
-            textvariable=self.url_var,
-            placeholder_text="https://www.youtube.com/shorts/... 또는 https://www.instagram.com/reel/...",
-            height=42,
+            height=88,
             font=self.font_input,
+            fg_color="#ffffff",
+            border_color="#94a3b8",
+            border_width=1,
             corner_radius=7,
+            text_color="#111827",
+            wrap="word",
         )
-        self.url_entry.grid(row=0, column=0, columnspan=2, padx=16, pady=(16, 10), sticky="ew")
+        self.url_text.grid(row=0, column=0, columnspan=3, padx=16, pady=(16, 10), sticky="ew")
+        self.url_text.bind("<Control-Return>", lambda _event: self._enqueue_from_input())
+        self.url_text.bind("<Return>", self._submit_single_line)
+
         self.paste_button = ctk.CTkButton(
             input_box,
             text="붙여넣기",
             height=36,
-            width=120,
+            width=112,
             corner_radius=7,
             font=self.font_button,
             fg_color=self.secondary_color,
@@ -239,15 +289,28 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             input_box,
             text="비우기",
             height=36,
-            width=100,
+            width=92,
             corner_radius=7,
             font=self.font_button,
             fg_color="#f1f5f9",
             hover_color="#e2e8f0",
             text_color="#334155",
-            command=lambda: self.url_var.set(""),
+            command=self._clear_url_input,
         )
-        self.clear_button.grid(row=1, column=1, padx=(6, 16), pady=(0, 16), sticky="e")
+        self.clear_button.grid(row=1, column=1, padx=6, pady=(0, 16), sticky="w")
+        self.add_button = ctk.CTkButton(
+            input_box,
+            text=self._start_button_text(),
+            height=36,
+            width=136,
+            corner_radius=7,
+            font=self.font_button,
+            fg_color=self.primary_color,
+            hover_color=self.primary_hover,
+            text_color="#ffffff",
+            command=self._enqueue_from_input,
+        )
+        self.add_button.grid(row=1, column=2, padx=(6, 16), pady=(0, 16), sticky="e")
 
         cookie_box = ctk.CTkFrame(card, fg_color="#f6f8fb", corner_radius=8)
         cookie_box.grid(row=3, column=0, padx=22, pady=(0, 18), sticky="ew")
@@ -282,6 +345,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             cookie_box,
             "Instagram 로그인이 필요한 릴스는 Chrome/Edge에 로그인된 상태면 더 잘 받아집니다. 꺼져 있어도 실패 시 자동 재시도합니다.",
             1,
+            wraplength=360,
         )
         cookie_helper.grid_configure(columnspan=2)
         return card
@@ -341,9 +405,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         quality_row.grid(row=4, column=0, padx=22, pady=(0, 20), sticky="ew")
         quality_row.grid_columnconfigure(1, weight=1)
         self.quality_label = ctk.CTkLabel(quality_row, text="MP3 품질", font=self.font_label, text_color="#334155")
-        self.quality_label.grid(
-            row=0, column=0, padx=(16, 12), pady=14, sticky="w"
-        )
+        self.quality_label.grid(row=0, column=0, padx=(16, 12), pady=14, sticky="w")
         self.quality_combo = ctk.CTkComboBox(
             quality_row,
             values=QUALITY_CHOICES,
@@ -362,41 +424,66 @@ class YouTubeInstagramMediaApp(ctk.CTk):
     def _action_card(self, parent: ctk.CTkBaseClass) -> ctk.CTkFrame:
         card = ctk.CTkFrame(parent, fg_color="#ffffff", corner_radius=10)
         card.grid_columnconfigure(0, weight=1)
-        self.start_button = ctk.CTkButton(
+        self.action_title = ctk.CTkLabel(card, text="3. 자동 큐 처리", font=self.font_card_title, text_color="#111827")
+        self.action_title.grid(row=0, column=0, padx=22, pady=(20, 10), sticky="w")
+        self.action_helper_label = self._helper_label(
             card,
-            text="빠르게 MP3 추출",
-            height=52,
-            corner_radius=8,
-            font=self.font_button,
-            fg_color=self.primary_color,
-            hover_color=self.primary_hover,
-            command=self._start_job,
+            "링크를 큐에 추가하면 즉시 시작하고, 처리 중에 더 넣은 링크는 뒤에 줄을 서서 순서대로 저장됩니다.",
+            1,
         )
-        self.start_button.grid(row=0, column=0, padx=22, pady=(22, 12), sticky="ew")
-        self.start_button_spinner = ActivitySpinner(card, size=18, color="#ffffff", bg=self.primary_hover)
-        self.action_helper_label = self._helper_label(card, "MP4는 제목 폴더를 만들고, 폴더 안에 영상과 스크린샷을 함께 넣습니다.", 1)
+        self.action_state_label = ctk.CTkLabel(
+            card,
+            text="대기 중",
+            font=self.font_body,
+            text_color="#334155",
+            fg_color="#f8fafc",
+            corner_radius=8,
+            padx=14,
+            pady=10,
+            anchor="w",
+        )
+        self.action_state_label.grid(row=2, column=0, padx=22, pady=(0, 20), sticky="ew")
         return card
 
     def _status_panel(self, parent: ctk.CTkFrame) -> None:
         title_row = ctk.CTkFrame(parent, fg_color="transparent")
         title_row.grid(row=0, column=0, sticky="ew", padx=22, pady=(22, 8))
         title_row.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(title_row, text="진행 상태", font=self.font_card_title, text_color="#111827").grid(
+        ctk.CTkLabel(title_row, text="처리 큐", font=self.font_card_title, text_color="#111827").grid(
             row=0, column=0, sticky="w"
         )
         self.activity_spinner = ActivitySpinner(title_row, size=18, color=self.primary_color, bg="#ffffff")
         self.activity_spinner.grid(row=0, column=1, sticky="e")
         self.activity_spinner.grid_remove()
 
-        self.status_label = ctk.CTkLabel(parent, text="대기 중", font=self.font_body, text_color="#334155", anchor="w")
-        self.status_label.grid(row=1, column=0, padx=22, pady=(0, 8), sticky="ew")
+        self.queue_summary_label = ctk.CTkLabel(parent, text="대기 0 · 완료 0", font=self.font_label, text_color="#64748b", anchor="w")
+        self.queue_summary_label.grid(row=1, column=0, padx=22, pady=(0, 8), sticky="ew")
+
+        self.status_label = ctk.CTkLabel(parent, text="링크를 넣으면 자동으로 시작합니다.", font=self.font_body, text_color="#334155", anchor="w", wraplength=360)
+        self.status_label.grid(row=2, column=0, padx=22, pady=(0, 8), sticky="ew")
 
         self.progress_bar = ctk.CTkProgressBar(parent, height=12, corner_radius=6, progress_color=self.primary_color)
-        self.progress_bar.grid(row=2, column=0, padx=22, pady=(0, 16), sticky="ew")
+        self.progress_bar.grid(row=3, column=0, padx=22, pady=(0, 12), sticky="new")
         self.progress_bar.set(0)
 
+        self.queue_list = ctk.CTkScrollableFrame(
+            parent,
+            fg_color="#f8fafc",
+            border_color="#e2e8f0",
+            border_width=1,
+            corner_radius=8,
+            scrollbar_button_color="#cbd5e1",
+            scrollbar_button_hover_color="#94a3b8",
+        )
+        self.queue_list.grid(row=4, column=0, padx=22, pady=(0, 12), sticky="nsew")
+        self.queue_list.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(parent, text="로그", font=self.font_label, text_color="#64748b").grid(
+            row=5, column=0, padx=22, pady=(0, 6), sticky="nw"
+        )
         self.log_box = ctk.CTkTextbox(
             parent,
+            height=120,
             font=self.font_log,
             fg_color="#f8fafc",
             border_color="#e2e8f0",
@@ -405,13 +492,13 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             text_color="#334155",
             wrap="word",
         )
-        self.log_box.grid(row=3, column=0, padx=22, pady=(0, 16), sticky="nsew")
-        self.log_box.insert("end", "YouTube 또는 Instagram 링크를 넣고 추출을 시작해 주세요.\n")
+        self.log_box.grid(row=6, column=0, padx=22, pady=(0, 16), sticky="nsew")
+        self.log_box.insert("end", "YouTube 또는 Instagram 링크를 큐에 추가해 주세요.\n")
         self.log_box.configure(state="disabled")
 
         self.open_output_button = ctk.CTkButton(
             parent,
-            text="저장 폴더 열기",
+            text="최근 저장 폴더 열기",
             height=42,
             corner_radius=8,
             font=self.font_button,
@@ -421,7 +508,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             state="disabled",
             command=self._open_latest_output,
         )
-        self.open_output_button.grid(row=4, column=0, padx=22, pady=(0, 22), sticky="ew")
+        self.open_output_button.grid(row=7, column=0, padx=22, pady=(0, 22), sticky="ew")
 
     def _ensure_user_folders(self) -> None:
         try:
@@ -434,9 +521,27 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             text = self.clipboard_get().strip()
         except tk.TclError:
             text = ""
-        if text:
-            self.url_var.set(text)
-            self.url_entry.focus_set()
+        if not text:
+            return
+
+        current = self._get_url_text().strip()
+        insert_text = text if not current else f"\n{text}"
+        self.url_text.insert("end", insert_text)
+        self.url_text.focus_set()
+
+    def _clear_url_input(self) -> None:
+        self.url_text.delete("1.0", "end")
+
+    def _get_url_text(self) -> str:
+        return self.url_text.get("1.0", "end").strip()
+
+    def _submit_single_line(self, event: tk.Event) -> str | None:
+        text = self._get_url_text()
+        urls = extract_urls(text)
+        if len(urls) == 1 and text.strip() == urls[0]:
+            self._enqueue_from_input()
+            return "break"
+        return None
 
     def _choose_output_dir(self) -> None:
         initial = self.output_dir_var.get().strip() or str(default_output_dir())
@@ -466,40 +571,82 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.settings = settings
         return settings
 
-    def _start_job(self) -> None:
+    def _enqueue_from_input(self) -> None:
+        source_text = self._get_url_text()
+        urls = extract_urls(source_text)
+        if not urls:
+            messagebox.showwarning("링크 필요", "YouTube 또는 Instagram 링크를 입력해 주세요.")
+            return
+
+        supported = [url for url in urls if YouTubeInstagramMediaPipeline.is_supported_url(url)]
+        skipped = len(urls) - len(supported)
+        if not supported:
+            messagebox.showwarning("지원하지 않는 링크", "YouTube 영상/Shorts 또는 Instagram 릴스/게시물 링크만 사용할 수 있습니다.")
+            return
+
+        settings = self._collect_settings()
+        for url in supported:
+            job = QueuedJob(
+                id=self.next_job_id,
+                url=url,
+                settings=AppSettings(
+                    output_dir=settings.output_dir,
+                    output_dir_custom=settings.output_dir_custom,
+                    output_format=settings.output_format,
+                    audio_quality=settings.audio_quality,
+                    use_browser_cookies=settings.use_browser_cookies,
+                    cookie_browser=settings.cookie_browser,
+                ),
+                output_format=settings.output_format,
+            )
+            self.next_job_id += 1
+            self.queue_items.append(job)
+            self._append_log(f"큐 추가 #{job.id}: {job.output_format} · {job.url}")
+
+        if skipped:
+            self._append_log(f"지원하지 않는 링크 {skipped}개는 건너뛰었습니다.")
+
+        self._clear_url_input()
+        self._refresh_queue()
+        self._start_next_job_if_idle()
+
+    def _start_next_job_if_idle(self) -> None:
         if self.worker_thread and self.worker_thread.is_alive():
             return
 
-        source = self.url_var.get().strip()
-        if not source:
-            messagebox.showwarning("링크 필요", "YouTube 또는 Instagram 링크를 입력해 주세요.")
+        next_job = next((job for job in self.queue_items if job.status == "queued"), None)
+        if next_job is None:
+            self.current_job = None
+            self._set_processing_indicator(False)
+            self._refresh_queue()
             return
-        settings = self._collect_settings()
 
-        self.latest_result = None
-        self._set_output_button_enabled(False)
-        self._set_start_button_busy(True)
-        self._set_controls_locked(True)
-        self.progress_bar.set(0)
-        self._set_status("시작합니다", 0.01)
-        self._append_log("작업을 시작합니다.")
+        self.current_job = next_job
+        next_job.status = "processing"
+        next_job.message = "준비 중"
+        next_job.progress = 0.01
+        self._set_output_button_enabled(self.latest_result is not None)
+        self._set_processing_indicator(True)
+        self._set_status(f"#{next_job.id} 처리 시작: {next_job.output_format}", next_job.progress)
+        self._append_log(f"작업 시작 #{next_job.id}: {next_job.url}")
+        self._refresh_queue()
 
-        self.worker_thread = threading.Thread(target=self._run_worker, args=(settings, source), daemon=True)
+        self.worker_thread = threading.Thread(target=self._run_worker, args=(next_job,), daemon=True)
         self.worker_thread.start()
 
-    def _run_worker(self, settings: AppSettings, source: str) -> None:
+    def _run_worker(self, job: QueuedJob) -> None:
         try:
-            pipeline = YouTubeInstagramMediaPipeline(settings, progress=self._worker_progress)
-            result = pipeline.run(source)
-            self.events.put(("done", result))
+            pipeline = YouTubeInstagramMediaPipeline(job.settings, progress=lambda message, percent, detail: self._worker_progress(job.id, message, percent, detail))
+            result = pipeline.run(job.url)
+            self.events.put(("done", (job.id, result)))
         except BaseException as exc:
             if isinstance(exc, UserFacingError):
-                self.events.put(("error", str(exc)))
+                self.events.put(("error", (job.id, str(exc))))
                 return
-            self.events.put(("error", f"{exc}\n\n{traceback.format_exc()}"))
+            self.events.put(("error", (job.id, f"{exc}\n\n{traceback.format_exc()}")))
 
-    def _worker_progress(self, message: str, percent: float, detail: str) -> None:
-        self.events.put(("progress", (message, percent, detail)))
+    def _worker_progress(self, job_id: int, message: str, percent: float, detail: str) -> None:
+        self.events.put(("progress", (job_id, message, percent, detail)))
 
     def _drain_events(self) -> None:
         while True:
@@ -508,27 +655,49 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             except queue.Empty:
                 break
             if kind == "progress":
-                message, percent, detail = payload  # type: ignore[misc]
-                self._set_status(str(message), float(percent))
+                job_id, message, percent, detail = payload  # type: ignore[misc]
+                job = self._find_job(int(job_id))
+                if job:
+                    job.message = str(message)
+                    job.progress = float(percent)
+                self._set_status(f"#{job_id} {message}", float(percent))
                 self._append_log(str(detail))
+                self._refresh_queue()
             elif kind == "done":
-                self.latest_result = payload  # type: ignore[assignment]
-                self._set_status("완료", 1.0)
-                self._append_log(f"완료: {self.latest_result.media_path}")
-                self._set_start_button_busy(False)
-                self._set_controls_locked(False)
+                job_id, result = payload  # type: ignore[misc]
+                job = self._find_job(int(job_id))
+                if job:
+                    job.status = "done"
+                    job.message = "완료"
+                    job.progress = 1.0
+                    job.result = result
+                self.latest_result = result
+                self.current_job = None
+                self.worker_thread = None
+                self._set_status(f"#{job_id} 완료", 1.0)
+                self._append_log(f"완료 #{job_id}: {result.media_path}")
                 self._set_output_button_enabled(True)
-                if self.latest_result.output_format == "MP4":
-                    messagebox.showinfo("완료", f"MP4와 스크린샷이 저장되었습니다.\n\n{self.latest_result.output_dir}")
-                else:
-                    messagebox.showinfo("완료", f"MP3 파일이 저장되었습니다.\n\n{self.latest_result.media_path}")
+                self._refresh_queue()
+                self._start_next_job_if_idle()
             elif kind == "error":
-                self._set_status("오류", 0)
-                self._append_log(str(payload))
-                self._set_start_button_busy(False)
-                self._set_controls_locked(False)
-                messagebox.showerror("추출 실패", str(payload).splitlines()[0])
+                job_id, error_text = payload  # type: ignore[misc]
+                job = self._find_job(int(job_id))
+                first_line = str(error_text).splitlines()[0] if str(error_text).splitlines() else "알 수 없는 오류"
+                if job:
+                    job.status = "error"
+                    job.message = first_line
+                    job.error = str(error_text)
+                    job.progress = 0
+                self.current_job = None
+                self.worker_thread = None
+                self._set_status(f"#{job_id} 실패: {first_line}", 0)
+                self._append_log(str(error_text))
+                self._refresh_queue()
+                self._start_next_job_if_idle()
         self.after(120, self._drain_events)
+
+    def _find_job(self, job_id: int) -> QueuedJob | None:
+        return next((job for job in self.queue_items if job.id == job_id), None)
 
     def _set_status(self, text: str, percent: float) -> None:
         self.status_label.configure(text=text)
@@ -540,58 +709,107 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
 
-    def _set_controls_locked(self, locked: bool) -> None:
-        state = "disabled" if locked else "normal"
-        cursor = "no" if locked else ""
-        for widget in (self.url_entry, self.output_dir_entry):
-            widget.configure(
-                state=state,
-                fg_color="#edf2f7" if locked else "#ffffff",
-                border_color="#cbd5e1" if locked else "#94a3b8",
-                text_color="#94a3b8" if locked else "#111827",
-            )
-            self._set_widget_cursor(widget, cursor)
-        self.format_segment.configure(state=state)
-        if locked:
-            self.quality_combo.configure(state="disabled", fg_color="#edf2f7")
-        else:
-            self._refresh_format_mode()
-        self.cookies_check.configure(state=state)
-        if locked:
-            self.cookie_browser_combo.configure(state="disabled", fg_color="#edf2f7")
-        else:
-            self._refresh_cookie_mode()
-        for button in (self.paste_button, self.clear_button, self.output_dir_button):
-            button.configure(state=state)
-            self._set_widget_cursor(button, cursor)
+    def _refresh_queue(self) -> None:
+        if not hasattr(self, "queue_list"):
+            return
 
-    def _set_start_button_busy(self, busy: bool) -> None:
+        for child in self.queue_list.winfo_children():
+            child.destroy()
+
+        if not self.queue_items:
+            empty = ctk.CTkLabel(
+                self.queue_list,
+                text="아직 큐에 들어간 링크가 없습니다.",
+                font=self.font_label,
+                text_color="#94a3b8",
+                anchor="center",
+            )
+            empty.grid(row=0, column=0, padx=16, pady=18, sticky="ew")
+        else:
+            for row_index, job in enumerate(self.queue_items):
+                self._queue_row(self.queue_list, job).grid(row=row_index, column=0, padx=10, pady=(10 if row_index == 0 else 0, 10), sticky="ew")
+
+        queued = sum(1 for job in self.queue_items if job.status == "queued")
+        done = sum(1 for job in self.queue_items if job.status == "done")
+        failed = sum(1 for job in self.queue_items if job.status == "error")
+        processing = 1 if self.current_job else 0
+        self.queue_summary_label.configure(text=f"처리 중 {processing} · 대기 {queued} · 완료 {done} · 실패 {failed}")
+
+        if self.current_job:
+            self.action_state_label.configure(
+                text=f"#{self.current_job.id} 처리 중 · 뒤에 {queued}개 대기",
+                text_color="#1d4ed8",
+                fg_color="#eff6ff",
+            )
+        elif self.queue_items:
+            self.action_state_label.configure(text="큐 처리 완료", text_color="#047857", fg_color="#ecfdf5")
+        else:
+            self.action_state_label.configure(text="대기 중", text_color="#334155", fg_color="#f8fafc")
+
+    def _queue_row(self, parent: ctk.CTkBaseClass, job: QueuedJob) -> ctk.CTkFrame:
+        styles = {
+            "queued": ("대기", "#f8fafc", "#e2e8f0", "#475569"),
+            "processing": ("처리 중", "#eff6ff", "#dbeafe", "#1d4ed8"),
+            "done": ("완료", "#ecfdf5", "#d1fae5", "#047857"),
+            "error": ("실패", "#fff1f2", "#ffe4e6", "#be123c"),
+        }
+        status_text, row_color, pill_color, text_color = styles.get(job.status, styles["queued"])
+        row = ctk.CTkFrame(parent, fg_color=row_color, corner_radius=8)
+        row.grid_columnconfigure(1, weight=1)
+
+        number = ctk.CTkLabel(
+            row,
+            text=f"{job.id}",
+            width=32,
+            height=32,
+            font=self.font_button,
+            text_color="#334155",
+            fg_color="#ffffff",
+            corner_radius=16,
+        )
+        number.grid(row=0, column=0, rowspan=2, padx=(10, 8), pady=10, sticky="n")
+
+        title = ctk.CTkLabel(
+            row,
+            text=f"{job.output_format} · {self._short_source_label(job.url)}",
+            font=self.font_label,
+            text_color="#111827",
+            anchor="w",
+        )
+        title.grid(row=0, column=1, padx=(0, 8), pady=(10, 2), sticky="ew")
+
+        detail = ctk.CTkLabel(
+            row,
+            text=self._compact_url(job.url) if job.status in {"queued", "processing"} else job.message,
+            font=self.font_small,
+            text_color="#64748b",
+            anchor="w",
+            justify="left",
+            wraplength=250,
+        )
+        detail.grid(row=1, column=1, padx=(0, 8), pady=(0, 10), sticky="ew")
+
+        pill = ctk.CTkLabel(
+            row,
+            text=status_text,
+            width=62,
+            height=26,
+            font=self.font_small,
+            text_color=text_color,
+            fg_color=pill_color,
+            corner_radius=13,
+        )
+        pill.grid(row=0, column=2, rowspan=2, padx=(0, 10), pady=10, sticky="e")
+        return row
+
+    def _set_processing_indicator(self, busy: bool) -> None:
         self.is_processing = busy
         if busy:
-            self.start_button.configure(
-                state="disabled",
-                text="    추출 중",
-                fg_color=self.primary_hover,
-                hover_color=self.primary_hover,
-                text_color_disabled="#ffffff",
-            )
-            self.start_button_spinner.place(in_=self.start_button, relx=0.39, rely=0.5, anchor="center")
-            self.start_button_spinner.start()
             self.activity_spinner.grid()
             self.activity_spinner.start()
         else:
             self.activity_spinner.stop()
             self.activity_spinner.grid_remove()
-            self.start_button_spinner.stop()
-            self.start_button_spinner.place_forget()
-            self.start_button.configure(
-                state="normal",
-                text=self._start_button_text(),
-                fg_color=self.primary_color,
-                hover_color=self.primary_hover,
-                text_color="#ffffff",
-                text_color_disabled=self.disabled_text,
-            )
 
     def _set_output_button_enabled(self, enabled: bool) -> None:
         if enabled:
@@ -624,8 +842,8 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             self.quality_combo.configure(state="readonly", fg_color="#ffffff", border_color="#94a3b8", button_color="#9ca3af")
             self.quality_label.configure(text_color="#334155")
 
-        if hasattr(self, "start_button") and not self.is_processing:
-            self.start_button.configure(text=self._start_button_text())
+        if hasattr(self, "add_button"):
+            self.add_button.configure(text=self._start_button_text())
 
     def _refresh_cookie_mode(self) -> None:
         if not hasattr(self, "cookie_browser_combo"):
@@ -639,17 +857,20 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         output_format = self.output_format_var.get().strip().upper()
         if output_format not in OUTPUT_FORMAT_CHOICES:
             output_format = "MP3"
-        return f"빠르게 {output_format} 추출"
+        return f"{output_format} 큐에 추가"
 
-    def _set_widget_cursor(self, widget: object, cursor: str) -> None:
-        targets = [widget, getattr(widget, "_canvas", None), getattr(widget, "_entry", None), getattr(widget, "_button", None)]
-        for target in targets:
-            if target is None:
-                continue
-            try:
-                target.configure(cursor=cursor)
-            except (tk.TclError, AttributeError, ValueError):
-                pass
+    def _short_source_label(self, url: str) -> str:
+        if YouTubeInstagramMediaPipeline.is_instagram_url(url):
+            return "Instagram"
+        if "/shorts/" in url:
+            return "YouTube Shorts"
+        return "YouTube"
+
+    @staticmethod
+    def _compact_url(url: str, max_length: int = 58) -> str:
+        if len(url) <= max_length:
+            return url
+        return f"{url[: max_length - 3]}..."
 
     def _open_latest_output(self) -> None:
         path = self.latest_result.output_dir if self.latest_result else Path(self.output_dir_var.get()).expanduser()
@@ -660,7 +881,6 @@ class YouTubeInstagramMediaApp(ctk.CTk):
 
     def _on_close(self) -> None:
         self.activity_spinner.stop()
-        self.start_button_spinner.stop()
         self._collect_settings()
         self.destroy()
 
