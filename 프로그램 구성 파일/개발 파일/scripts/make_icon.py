@@ -90,6 +90,33 @@ def draw_polygon(img: Image, points: tuple[tuple[float, float], ...], color: Col
 
 
 def render(size: int) -> Image:
+    if size <= 24:
+        return render_small(size)
+    return render_large(size)
+
+
+def render_small(size: int) -> Image:
+    img: Image = [[(0, 0, 0, 0) for _ in range(size)] for _ in range(size)]
+
+    x0 = y0 = 1.0
+    x1 = y1 = size - 1.0
+    radius = max(3.0, size * 0.18)
+    for y in range(size):
+        for x in range(size):
+            alpha = rounded_rect_alpha(x + 0.5, y + 0.5, x0, y0, x1, y1, radius)
+            if alpha > 0.08:
+                img[y][x] = (8, 13, 24, 255)
+
+    triangle = (
+        (round(size * 0.38), round(size * 0.27)),
+        (round(size * 0.38), round(size * 0.73)),
+        (round(size * 0.74), size * 0.5),
+    )
+    draw_polygon(img, triangle, (248, 250, 252, 255))
+    return img
+
+
+def render_large(size: int) -> Image:
     scale = SUPERSAMPLE
     canvas_size = size * scale
     img: Image = [[(0, 0, 0, 0) for _ in range(canvas_size)] for _ in range(canvas_size)]
@@ -99,56 +126,21 @@ def render(size: int) -> Image:
     x0 = y0 = inset
     x1 = y1 = canvas_size - inset
 
-    # A deep neutral base keeps the symbol crisp in the taskbar and file explorer.
-    top_left = (15, 23, 42, 255)
-    bottom_right = (30, 41, 71, 255)
-    for y in range(canvas_size):
-        for x in range(canvas_size):
-            alpha = rounded_rect_alpha(x + 0.5, y + 0.5, x0, y0, x1, y1, radius)
-            if alpha:
-                diagonal = (x + y) / max(1, (canvas_size - 1) * 2)
-                color = mix(top_left, bottom_right, diagonal)
-                img[y][x] = color[0], color[1], color[2], clamp(255 * alpha)
-
-    draw_rounded_rect(
-        img,
-        size * 0.18 * scale,
-        size * 0.19 * scale,
-        size * 0.24 * scale,
-        size * 0.81 * scale,
-        size * 0.03 * scale,
-        (45, 212, 191, 255),
-    )
-    draw_rounded_rect(
-        img,
-        size * 0.68 * scale,
-        size * 0.26 * scale,
-        size * 0.75 * scale,
-        size * 0.74 * scale,
-        size * 0.035 * scale,
-        (96, 165, 250, 255),
-    )
-    draw_rounded_rect(
-        img,
-        size * 0.79 * scale,
-        size * 0.37 * scale,
-        size * 0.86 * scale,
-        size * 0.63 * scale,
-        size * 0.035 * scale,
-        (244, 114, 182, 255),
-    )
+    draw_rounded_rect(img, x0, y0, x1, y1, radius, (4, 8, 18, 255))
+    inner = max(1.0, size * 0.018) * scale
+    draw_rounded_rect(img, x0 + inner, y0 + inner, x1 - inner, y1 - inner, radius - inner, (10, 16, 30, 255))
 
     shadow = (
-        (size * 0.372 * scale, size * 0.312 * scale),
-        (size * 0.372 * scale, size * 0.708 * scale),
-        (size * 0.64 * scale, size * 0.51 * scale),
+        (size * 0.382 * scale, size * 0.302 * scale),
+        (size * 0.382 * scale, size * 0.718 * scale),
+        (size * 0.72 * scale, size * 0.51 * scale),
     )
-    draw_polygon(img, shadow, (0, 0, 0, 64))
+    draw_polygon(img, shadow, (0, 0, 0, 56))
 
     triangle = (
-        (size * 0.35 * scale, size * 0.29 * scale),
-        (size * 0.35 * scale, size * 0.69 * scale),
-        (size * 0.63 * scale, size * 0.49 * scale),
+        (size * 0.36 * scale, size * 0.27 * scale),
+        (size * 0.36 * scale, size * 0.73 * scale),
+        (size * 0.70 * scale, size * 0.50 * scale),
     )
     draw_polygon(img, triangle, (248, 250, 252, 255))
 
