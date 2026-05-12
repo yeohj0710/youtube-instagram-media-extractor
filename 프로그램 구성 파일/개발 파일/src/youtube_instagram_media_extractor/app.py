@@ -158,6 +158,9 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.output_dir_var = tk.StringVar(value=self.settings.output_dir or str(default_output_dir()))
         self.include_video_var = tk.BooleanVar(value=bool(self.settings.include_video))
         self.include_audio_var = tk.BooleanVar(value=bool(self.settings.include_audio))
+        self.capture_screenshots_var = tk.BooleanVar(
+            value=bool(self.settings.capture_screenshots) and bool(self.settings.include_video)
+        )
         self.video_quality_var = tk.StringVar(value=self._video_quality_label(self.settings.video_quality))
         initial_audio_quality = "320" if str(self.settings.audio_quality or "320") == "192" else str(self.settings.audio_quality or "320")
         self.audio_quality_var = tk.StringVar(value=initial_audio_quality)
@@ -381,6 +384,30 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             button_color="#9ca3af",
         )
         self.audio_quality_combo.grid(row=1, column=3, padx=(0, 16), pady=(8, 14), sticky="e")
+
+        self.screenshot_row = ctk.CTkFrame(option_box, fg_color="transparent")
+        self.screenshot_row.grid(row=2, column=0, columnspan=4, padx=16, pady=(0, 14), sticky="ew")
+        self.screenshot_row.grid_columnconfigure(1, weight=1)
+        self.screenshot_label = ctk.CTkLabel(
+            self.screenshot_row,
+            text="스크린샷",
+            font=self.font_label,
+            text_color="#334155",
+        )
+        self.screenshot_label.grid(row=0, column=0, padx=(0, 20), sticky="w")
+        self.screenshot_check = ctk.CTkCheckBox(
+            self.screenshot_row,
+            text="1초 간격으로 이미지 추출",
+            variable=self.capture_screenshots_var,
+            font=self.font_label,
+            text_color="#334155",
+            fg_color=self.primary_color,
+            hover_color=self.primary_hover,
+            checkbox_width=20,
+            checkbox_height=20,
+            command=self._refresh_media_options,
+        )
+        self.screenshot_check.grid(row=0, column=1, sticky="w")
 
         folder_row = ctk.CTkFrame(card, fg_color="transparent")
         folder_row.grid(row=4, column=0, padx=22, pady=(0, 12), sticky="ew")
@@ -853,6 +880,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         if not include_video and not include_audio:
             include_video = True
             include_audio = True
+        capture_screenshots = bool(self.capture_screenshots_var.get()) and include_video
 
         audio_quality = self.audio_quality_var.get().strip()
         if audio_quality not in AUDIO_QUALITY_CHOICES:
@@ -867,6 +895,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             output_format=output_format,
             include_video=include_video,
             include_audio=include_audio,
+            capture_screenshots=capture_screenshots,
             audio_quality=audio_quality,
             video_quality=video_quality,
             use_browser_cookies=bool(self.use_cookies_var.get()),
@@ -893,7 +922,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             return
 
         settings = self._collect_settings()
-        media_label = self._media_selection_label(settings.include_video, settings.include_audio)
+        media_label = self._media_selection_label(settings.include_video, settings.include_audio, settings.capture_screenshots)
         job = QueuedJob(
             id=self.next_job_id,
             url=source,
@@ -903,6 +932,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
                 output_format=settings.output_format,
                 include_video=settings.include_video,
                 include_audio=settings.include_audio,
+                capture_screenshots=settings.capture_screenshots,
                 audio_quality=settings.audio_quality,
                 video_quality=settings.video_quality,
                 use_browser_cookies=settings.use_browser_cookies,
@@ -1114,6 +1144,14 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             button_color="#9ca3af" if include_video else "#cbd5e1",
         )
         self.video_quality_label.configure(text_color="#334155" if include_video else "#94a3b8")
+        if hasattr(self, "screenshot_row"):
+            if include_video:
+                self.screenshot_row.grid()
+                self.screenshot_check.configure(state="normal", text_color="#334155")
+                self.screenshot_label.configure(text_color="#334155")
+            else:
+                self.capture_screenshots_var.set(False)
+                self.screenshot_row.grid_remove()
         self.audio_quality_combo.configure(
             state=audio_state,
             fg_color="#ffffff" if include_audio else "#edf2f7",
@@ -1122,7 +1160,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         )
         self.audio_quality_label.configure(text_color="#334155" if include_audio else "#94a3b8")
 
-        label = self._media_selection_label(include_video, include_audio)
+        label = self._media_selection_label(include_video, include_audio, bool(self.capture_screenshots_var.get()))
         if label == "선택 필요":
             self.selection_summary_label.configure(text="영상 또는 소리 중 하나 이상을 선택해 주세요.", text_color="#be123c", fg_color="#fff1f2")
             self.selection_summary_label.grid()
@@ -1182,11 +1220,13 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             )
 
     @staticmethod
-    def _media_selection_label(include_video: bool, include_audio: bool) -> str:
+    def _media_selection_label(include_video: bool, include_audio: bool, capture_screenshots: bool = False) -> str:
         if include_video and include_audio:
-            return "영상+소리"
+            label = "영상+소리"
+            return f"{label}+스크린샷" if capture_screenshots else label
         if include_video:
-            return "영상만"
+            label = "영상만"
+            return f"{label}+스크린샷" if capture_screenshots else label
         if include_audio:
             return "소리만"
         return "선택 필요"

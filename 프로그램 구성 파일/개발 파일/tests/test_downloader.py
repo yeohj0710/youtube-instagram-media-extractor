@@ -38,6 +38,78 @@ def test_unique_dir_uses_parentheses_for_duplicates(tmp_path: Path):
     assert unique_dir(existing) == tmp_path / "title (2)"
 
 
+def test_mp4_final_path_stays_in_output_root(tmp_path: Path):
+    current = tmp_path / "__download_260512120000_title.mp4"
+    current.write_bytes(b"mp4")
+
+    target = YouTubeInstagramMediaPipeline._friendly_final_path(tmp_path, "260512120000", "Title", ".mp4", current)
+
+    assert target == tmp_path / "260512120000 Title.mp4"
+
+
+def test_screenshot_output_dir_is_separate_from_media_files(tmp_path: Path):
+    target = YouTubeInstagramMediaPipeline._screenshot_output_dir(tmp_path, "Title")
+
+    assert target == tmp_path / "Title 스크린샷 추출본"
+
+
+def test_mp4_download_skips_screenshots_when_option_is_off(tmp_path: Path, monkeypatch):
+    started = "260512120000"
+    downloaded = tmp_path / f"__download_{started}_demo.mp4"
+    downloaded.write_bytes(b"mp4")
+    pipeline = YouTubeInstagramMediaPipeline(AppSettings(output_dir=str(tmp_path), include_video=True, include_audio=True))
+    monkeypatch.setattr(pipeline, "_import_ytdlp", lambda: object())
+    monkeypatch.setattr(pipeline, "_extract_with_ytdlp", lambda _module, _url, _opts: {"title": "Demo Video"})
+
+    def fail_capture(_video_path: Path, _output_dir: Path) -> Path:
+        raise AssertionError("screenshots should be skipped")
+
+    monkeypatch.setattr(pipeline, "_capture_screenshots", fail_capture)
+
+    media_path, title, output_dir, screenshot_dir = pipeline._download_mp4(
+        "https://youtu.be/demo",
+        started,
+        tmp_path,
+        include_audio=True,
+        capture_screenshots=False,
+    )
+
+    assert title == "Demo Video"
+    assert media_path == (tmp_path / f"{started} Demo Video.mp4").resolve()
+    assert output_dir == tmp_path.resolve()
+    assert screenshot_dir is None
+    assert not (tmp_path / "Demo Video").exists()
+
+
+def test_mp4_download_puts_screenshots_in_separate_folder(tmp_path: Path, monkeypatch):
+    started = "260512120000"
+    downloaded = tmp_path / f"__download_{started}_demo.mp4"
+    downloaded.write_bytes(b"mp4")
+    pipeline = YouTubeInstagramMediaPipeline(AppSettings(output_dir=str(tmp_path), include_video=True, include_audio=True, capture_screenshots=True))
+    monkeypatch.setattr(pipeline, "_import_ytdlp", lambda: object())
+    monkeypatch.setattr(pipeline, "_extract_with_ytdlp", lambda _module, _url, _opts: {"title": "Demo Video"})
+
+    def fake_capture(_video_path: Path, output_dir: Path) -> Path:
+        (output_dir / "0001_00-00-00.jpg").write_bytes(b"jpg")
+        return output_dir
+
+    monkeypatch.setattr(pipeline, "_capture_screenshots", fake_capture)
+
+    media_path, _title, output_dir, screenshot_dir = pipeline._download_mp4(
+        "https://youtu.be/demo",
+        started,
+        tmp_path,
+        include_audio=True,
+        capture_screenshots=True,
+    )
+
+    assert media_path.parent == tmp_path.resolve()
+    assert output_dir == tmp_path.resolve()
+    assert screenshot_dir == (tmp_path / "Demo Video 스크린샷 추출본").resolve()
+    assert (tmp_path / f"{started} Demo Video.mp4").exists()
+    assert (tmp_path / "Demo Video 스크린샷 추출본" / "0001_00-00-00.jpg").exists()
+
+
 def test_cleanup_extra_outputs_keeps_only_selected_file(tmp_path: Path):
     mp3 = tmp_path / "__download_260512120000_title.mp3"
     mp4 = tmp_path / "__download_260512120000_title.mp4"

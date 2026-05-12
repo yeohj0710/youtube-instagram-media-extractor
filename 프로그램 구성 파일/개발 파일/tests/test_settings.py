@@ -14,6 +14,7 @@ def test_load_settings_defaults_to_video_audio_and_browser_cookies(tmp_path, mon
 
     assert loaded.include_video is True
     assert loaded.include_audio is True
+    assert loaded.capture_screenshots is False
     assert loaded.use_browser_cookies is True
     assert loaded.video_quality == "1080"
     assert loaded.audio_quality == "320"
@@ -61,6 +62,7 @@ def test_save_settings_keeps_custom_output_dir(tmp_path, monkeypatch):
             output_format="MP4",
             include_video=True,
             include_audio=False,
+            capture_screenshots=True,
             audio_quality="256",
             video_quality="720",
         )
@@ -72,5 +74,22 @@ def test_save_settings_keeps_custom_output_dir(tmp_path, monkeypatch):
     assert payload["output_format"] == "MP4"
     assert payload["include_video"] is True
     assert payload["include_audio"] is False
+    assert payload["capture_screenshots"] is True
     assert payload["audio_quality"] == "256"
     assert payload["video_quality"] == "720"
+
+
+def test_load_settings_disables_screenshots_without_video(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.chdir(tmp_path)
+    path = settings_module.settings_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"include_video": False, "include_audio": True, "capture_screenshots": True}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    loaded = load_settings()
+
+    assert loaded.include_video is False
+    assert loaded.capture_screenshots is False

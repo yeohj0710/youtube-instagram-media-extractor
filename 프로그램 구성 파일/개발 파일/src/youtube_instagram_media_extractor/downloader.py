@@ -62,9 +62,17 @@ class YouTubeInstagramMediaPipeline:
         self.progress("준비 중", 0.03, f"저장 폴더를 확인했습니다: {output_root}")
         if media_mode in {MEDIA_VIDEO_AUDIO, MEDIA_VIDEO_ONLY}:
             include_audio = media_mode == MEDIA_VIDEO_AUDIO
-            media_path, title, final_dir, screenshot_dir = self._download_mp4(url, started, output_root, include_audio)
-            done_detail = f"{self._mode_label(media_mode)}와 스크린샷 저장 완료: {final_dir}"
-            result_output_dir = final_dir
+            capture_screenshots = bool(getattr(self.settings, "capture_screenshots", False))
+            media_path, title, result_output_dir, screenshot_dir = self._download_mp4(
+                url,
+                started,
+                output_root,
+                include_audio,
+                capture_screenshots,
+            )
+            done_detail = f"{self._mode_label(media_mode)} 저장 완료: {media_path}"
+            if screenshot_dir is not None:
+                done_detail = f"{done_detail}\n스크린샷 저장 완료: {screenshot_dir}"
         else:
             media_path, title = self._download_mp3(url, started, output_root)
             screenshot_dir = None
@@ -155,7 +163,14 @@ class YouTubeInstagramMediaPipeline:
             media_path = final_path
         return media_path.resolve(), title
 
-    def _download_mp4(self, url: str, started: str, output_root: Path, include_audio: bool) -> tuple[Path, str, Path, Path]:
+    def _download_mp4(
+        self,
+        url: str,
+        started: str,
+        output_root: Path,
+        include_audio: bool,
+        capture_screenshots: bool,
+    ) -> tuple[Path, str, Path, Path | None]:
         yt_dlp = self._import_ytdlp()
         ydl_opts = self._base_ytdlp_opts(started, output_root)
         ydl_opts.update(
@@ -180,15 +195,19 @@ class YouTubeInstagramMediaPipeline:
         if not downloaded_path:
             raise UserFacingError("다운로드된 MP4 파일을 찾지 못했습니다.")
 
-        final_dir = unique_dir(output_root / sanitize_filename(title))
-        final_dir.mkdir(parents=True, exist_ok=True)
-        final_path = unique_path(final_dir / f"{sanitize_filename(title)}.mp4")
-        downloaded_path.replace(final_path)
+        final_path = self._friendly_final_path(output_root, started, title, ".mp4", downloaded_path)
+        if final_path != downloaded_path:
+            downloaded_path.replace(final_path)
         if not include_audio:
             final_path = self._strip_audio(final_path)
-        self.progress("스크린샷 캡처 중", 0.94, "MP4에서 1초 간격으로 화면을 캡처합니다.")
-        screenshot_dir = self._capture_screenshots(final_path, final_dir)
-        return final_path.resolve(), title, final_dir.resolve(), screenshot_dir.resolve()
+
+        screenshot_dir: Path | None = None
+        if capture_screenshots:
+            screenshot_dir = self._screenshot_output_dir(output_root, title)
+            screenshot_dir.mkdir(parents=True, exist_ok=True)
+            self.progress("스크린샷 캡처 중", 0.94, "MP4에서 1초 간격으로 화면을 캡처합니다.")
+            screenshot_dir = self._capture_screenshots(final_path, screenshot_dir)
+        return final_path.resolve(), title, output_root.resolve(), screenshot_dir.resolve() if screenshot_dir else None
 
     def _video_format_selector(self, include_audio: bool) -> str:
         height = self._video_height_filter()
@@ -584,6 +603,10 @@ class YouTubeInstagramMediaPipeline:
         if os.path.normcase(str(target.resolve())) == os.path.normcase(str(current_path.resolve())):
             return current_path
         return unique_path(target)
+
+    @staticmethod
+    def _screenshot_output_dir(output_root: Path, title: str) -> Path:
+        return unique_dir(output_root / f"{sanitize_filename(title)} 스크린샷 추출본")
 
     @staticmethod
     def _cleanup_extra_outputs(output_root: Path, started: str, kept_path: Path) -> None:

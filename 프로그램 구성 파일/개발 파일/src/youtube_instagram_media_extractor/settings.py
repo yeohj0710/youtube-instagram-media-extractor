@@ -25,6 +25,7 @@ class AppSettings:
     output_format: str = DEFAULT_OUTPUT_FORMAT
     include_video: bool = True
     include_audio: bool = True
+    capture_screenshots: bool = False
     audio_quality: str = DEFAULT_AUDIO_QUALITY
     video_quality: str = DEFAULT_VIDEO_QUALITY
     use_browser_cookies: bool = True
@@ -123,6 +124,7 @@ def load_settings() -> AppSettings:
     settings.video_quality = normalize_video_quality(settings.video_quality)
     settings.include_video = bool(settings.include_video)
     settings.include_audio = bool(settings.include_audio)
+    settings.capture_screenshots = bool(settings.capture_screenshots) and settings.include_video
     settings.use_browser_cookies = bool(settings.use_browser_cookies)
     return settings
 
