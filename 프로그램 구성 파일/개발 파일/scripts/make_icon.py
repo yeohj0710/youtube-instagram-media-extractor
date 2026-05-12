@@ -100,19 +100,40 @@ def render_small(size: int) -> Image:
 
     x0 = y0 = 1.0
     x1 = y1 = size - 1.0
-    radius = max(3.0, size * 0.18)
+    radius = max(3.0, size * 0.22)
     for y in range(size):
         for x in range(size):
             alpha = rounded_rect_alpha(x + 0.5, y + 0.5, x0, y0, x1, y1, radius)
             if alpha > 0.08:
-                img[y][x] = (8, 13, 24, 255)
+                img[y][x] = (37, 99, 235, 255)
 
-    triangle = (
-        (round(size * 0.38), round(size * 0.27)),
-        (round(size * 0.38), round(size * 0.73)),
-        (round(size * 0.74), size * 0.5),
+    draw_rounded_rect(
+        img,
+        size * 0.44,
+        size * 0.22,
+        size * 0.56,
+        size * 0.56,
+        max(0.5, size * 0.04),
+        (255, 255, 255, 255),
     )
-    draw_polygon(img, triangle, (248, 250, 252, 255))
+    arrow = (
+        (size * 0.30, size * 0.50),
+        (size * 0.50, size * 0.70),
+        (size * 0.70, size * 0.50),
+        (size * 0.59, size * 0.50),
+        (size * 0.50, size * 0.59),
+        (size * 0.41, size * 0.50),
+    )
+    draw_polygon(img, arrow, (255, 255, 255, 255))
+    draw_rounded_rect(
+        img,
+        size * 0.30,
+        size * 0.76,
+        size * 0.70,
+        size * 0.86,
+        max(0.5, size * 0.05),
+        (255, 255, 255, 245),
+    )
     return img
 
 
@@ -126,23 +147,43 @@ def render_large(size: int) -> Image:
     x0 = y0 = inset
     x1 = y1 = canvas_size - inset
 
-    draw_rounded_rect(img, x0, y0, x1, y1, radius, (4, 8, 18, 255))
-    inner = max(1.0, size * 0.018) * scale
-    draw_rounded_rect(img, x0 + inner, y0 + inner, x1 - inner, y1 - inner, radius - inner, (10, 16, 30, 255))
+    top_left = (59, 130, 246, 255)
+    bottom_right = (37, 99, 235, 255)
+    for y in range(canvas_size):
+        for x in range(canvas_size):
+            alpha = rounded_rect_alpha(x + 0.5, y + 0.5, x0, y0, x1, y1, radius)
+            if alpha:
+                diagonal = (x + y) / max(1, (canvas_size - 1) * 2)
+                color = mix(top_left, bottom_right, diagonal)
+                img[y][x] = color[0], color[1], color[2], clamp(255 * alpha)
 
-    shadow = (
-        (size * 0.382 * scale, size * 0.302 * scale),
-        (size * 0.382 * scale, size * 0.718 * scale),
-        (size * 0.72 * scale, size * 0.51 * scale),
+    draw_rounded_rect(
+        img,
+        size * 0.455 * scale,
+        size * 0.22 * scale,
+        size * 0.545 * scale,
+        size * 0.55 * scale,
+        size * 0.045 * scale,
+        (255, 255, 255, 255),
     )
-    draw_polygon(img, shadow, (0, 0, 0, 56))
-
-    triangle = (
-        (size * 0.36 * scale, size * 0.27 * scale),
-        (size * 0.36 * scale, size * 0.73 * scale),
-        (size * 0.70 * scale, size * 0.50 * scale),
+    arrow = (
+        (size * 0.31 * scale, size * 0.49 * scale),
+        (size * 0.50 * scale, size * 0.68 * scale),
+        (size * 0.69 * scale, size * 0.49 * scale),
+        (size * 0.58 * scale, size * 0.49 * scale),
+        (size * 0.50 * scale, size * 0.57 * scale),
+        (size * 0.42 * scale, size * 0.49 * scale),
     )
-    draw_polygon(img, triangle, (248, 250, 252, 255))
+    draw_polygon(img, arrow, (255, 255, 255, 255))
+    draw_rounded_rect(
+        img,
+        size * 0.29 * scale,
+        size * 0.75 * scale,
+        size * 0.71 * scale,
+        size * 0.84 * scale,
+        size * 0.045 * scale,
+        (255, 255, 255, 245),
+    )
 
     return downsample(img, size)
 

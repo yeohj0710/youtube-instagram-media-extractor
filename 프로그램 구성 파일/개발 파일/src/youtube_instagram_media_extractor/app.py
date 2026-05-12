@@ -5,6 +5,7 @@ import queue
 import re
 import threading
 import traceback
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, font as tkfont, messagebox
@@ -220,6 +221,8 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             pady=3,
         )
         credit.grid(row=1, column=0, padx=32, pady=(0, 8), sticky="w")
+        credit.configure(cursor="hand2")
+        credit.bind("<Button-1>", lambda _event: self._open_developer_profile())
         subtitle = ctk.CTkLabel(
             header,
             text="YouTube 영상·Shorts와 Instagram 릴스를 영상 또는 소리로 빠르게 저장합니다.",
@@ -1224,6 +1227,10 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             os.startfile(path)  # type: ignore[attr-defined]
         else:
             messagebox.showinfo("저장 폴더", str(path))
+
+    @staticmethod
+    def _open_developer_profile() -> None:
+        webbrowser.open("https://github.com/yeohj0710")
 
     def _on_close(self) -> None:
         self.activity_spinner.stop()
