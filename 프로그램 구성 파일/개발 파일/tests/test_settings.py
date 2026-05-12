@@ -16,6 +16,7 @@ def test_load_settings_defaults_to_video_audio_and_browser_cookies(tmp_path, mon
     assert loaded.include_audio is True
     assert loaded.use_browser_cookies is True
     assert loaded.video_quality == "1080"
+    assert loaded.audio_quality == "320"
 
 
 def test_saved_default_output_dir_follows_current_app_root(tmp_path, monkeypatch):

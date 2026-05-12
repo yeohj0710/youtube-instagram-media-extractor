@@ -94,7 +94,7 @@ class YouTubeInstagramMediaPipeline:
             return MEDIA_VIDEO_ONLY
         if include_audio:
             return MEDIA_AUDIO_ONLY
-        raise UserFacingError("영상 또는 소리 중 하나는 선택해야 합니다.")
+        raise UserFacingError("영상 또는 소리 중 하나 이상을 선택해 주세요.")
 
     @staticmethod
     def _output_format_for_mode(media_mode: str) -> str:
@@ -429,8 +429,8 @@ class YouTubeInstagramMediaPipeline:
             path.rename(target)
 
     def _audio_quality(self) -> str:
-        quality = str(self.settings.audio_quality or "192").strip()
-        return quality if quality in {"128", "192", "256", "320"} else "192"
+        quality = str(self.settings.audio_quality or "320").strip()
+        return quality if quality in {"128", "192", "256", "320"} else "320"
 
     def _video_quality(self) -> str:
         quality = str(getattr(self.settings, "video_quality", "1080") or "1080").strip().lower()

@@ -98,6 +98,27 @@ class ActivitySpinner(tk.Canvas):
             self.after_id = self.after(33, self._tick)
 
 
+class ChevronIcon(tk.Canvas):
+    def __init__(self, master: tk.Misc, size: int = 18, color: str = "#64748b", bg: str = "#f8fafc") -> None:
+        super().__init__(master, width=size, height=size, bg=bg, highlightthickness=0, bd=0)
+        self.size = size
+        self.color = color
+        self.is_open = False
+        self.draw()
+
+    def set_open(self, is_open: bool) -> None:
+        self.is_open = is_open
+        self.draw()
+
+    def draw(self) -> None:
+        self.delete("all")
+        if self.is_open:
+            points = (self.size * 0.28, self.size * 0.42, self.size * 0.50, self.size * 0.64, self.size * 0.72, self.size * 0.42)
+        else:
+            points = (self.size * 0.38, self.size * 0.28, self.size * 0.62, self.size * 0.50, self.size * 0.38, self.size * 0.72)
+        self.create_line(*points, fill=self.color, width=2.2, capstyle="round", joinstyle="round")
+
+
 class YouTubeInstagramMediaApp(ctk.CTk):
     primary_color = "#2563eb"
     primary_hover = "#1d4ed8"
@@ -137,7 +158,8 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.include_video_var = tk.BooleanVar(value=bool(self.settings.include_video))
         self.include_audio_var = tk.BooleanVar(value=bool(self.settings.include_audio))
         self.video_quality_var = tk.StringVar(value=self._video_quality_label(self.settings.video_quality))
-        self.audio_quality_var = tk.StringVar(value=str(self.settings.audio_quality or "192"))
+        initial_audio_quality = "320" if str(self.settings.audio_quality or "320") == "192" else str(self.settings.audio_quality or "320")
+        self.audio_quality_var = tk.StringVar(value=initial_audio_quality)
         self.use_cookies_var = tk.BooleanVar(value=bool(self.settings.use_browser_cookies))
         self.cookie_browser_var = tk.StringVar(value=self.settings.cookie_browser or "chrome")
 
@@ -221,6 +243,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         )
         left.grid(row=0, column=0, sticky="nsew", padx=(24, 12), pady=24)
         left.grid_columnconfigure(0, weight=1)
+        self._configure_scroll_speed(left)
 
         right = ctk.CTkFrame(body, fg_color="#ffffff", corner_radius=10)
         right.grid(row=0, column=1, sticky="nsew", padx=(12, 24), pady=24)
@@ -228,13 +251,19 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         right.grid_rowconfigure(4, weight=2)
         right.grid_rowconfigure(6, weight=1)
 
-        self._link_card(left).grid(row=0, column=0, sticky="ew", pady=(0, 14))
-        self._output_card(left).grid(row=1, column=0, sticky="ew")
+        self._settings_card(left).grid(row=0, column=0, sticky="ew")
         self._status_panel(right)
         self._refresh_media_options()
         self._refresh_cookie_mode()
         self._refresh_advanced_options()
         self._refresh_queue()
+
+    @staticmethod
+    def _configure_scroll_speed(frame: ctk.CTkScrollableFrame) -> None:
+        try:
+            frame._parent_canvas.configure(yscrollincrement=28)  # type: ignore[attr-defined]
+        except (tk.TclError, AttributeError):
+            pass
 
     def _card(self, parent: ctk.CTkBaseClass, title: str) -> ctk.CTkFrame:
         card = ctk.CTkFrame(parent, fg_color="#ffffff", corner_radius=10)
@@ -255,6 +284,218 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         )
         label.grid(row=row, column=0, padx=22, pady=(0, 12), sticky="ew")
         return label
+
+    def _settings_card(self, parent: ctk.CTkBaseClass) -> ctk.CTkFrame:
+        card = self._card(parent, "링크와 옵션")
+        self._helper_label(card, "링크 하나를 넣고 옵션을 고른 뒤 큐에 추가합니다. 처리 중에 새 링크를 추가하면 뒤에서 순서대로 실행됩니다.", 1)
+
+        input_box = ctk.CTkFrame(card, fg_color="#f6f8fb", corner_radius=8)
+        input_box.grid(row=2, column=0, padx=22, pady=(0, 12), sticky="ew")
+        input_box.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(input_box, text="링크", font=self.font_label, text_color="#334155").grid(
+            row=0, column=0, padx=(16, 12), pady=14, sticky="w"
+        )
+        self.url_text = ctk.CTkTextbox(
+            input_box,
+            height=42,
+            font=self.font_input,
+            fg_color="#ffffff",
+            border_color="#94a3b8",
+            border_width=1,
+            corner_radius=7,
+            text_color="#111827",
+            wrap="none",
+            undo=True,
+            activate_scrollbars=False,
+        )
+        self.url_text.grid(row=0, column=1, padx=(0, 16), pady=12, sticky="ew")
+        self.url_text.bind("<Return>", lambda _event: "break")
+
+        option_box = ctk.CTkFrame(card, fg_color="#f6f8fb", corner_radius=8)
+        option_box.grid(row=3, column=0, padx=22, pady=(0, 12), sticky="ew")
+        option_box.grid_columnconfigure(1, weight=1)
+        option_box.grid_columnconfigure(3, weight=1)
+
+        ctk.CTkLabel(option_box, text="저장할 내용", font=self.font_label, text_color="#334155").grid(
+            row=0, column=0, padx=(16, 12), pady=(14, 8), sticky="w"
+        )
+        checks = ctk.CTkFrame(option_box, fg_color="transparent")
+        checks.grid(row=0, column=1, columnspan=3, padx=(0, 16), pady=(14, 8), sticky="e")
+        self.video_check = ctk.CTkCheckBox(
+            checks,
+            text="영상",
+            variable=self.include_video_var,
+            font=self.font_label,
+            text_color="#334155",
+            fg_color=self.primary_color,
+            hover_color=self.primary_hover,
+            checkbox_width=20,
+            checkbox_height=20,
+            command=self._refresh_media_options,
+        )
+        self.video_check.grid(row=0, column=0, padx=(0, 18), sticky="w")
+        self.audio_check = ctk.CTkCheckBox(
+            checks,
+            text="소리",
+            variable=self.include_audio_var,
+            font=self.font_label,
+            text_color="#334155",
+            fg_color=self.primary_color,
+            hover_color=self.primary_hover,
+            checkbox_width=20,
+            checkbox_height=20,
+            command=self._refresh_media_options,
+        )
+        self.audio_check.grid(row=0, column=1, sticky="w")
+
+        self.video_quality_label = ctk.CTkLabel(option_box, text="영상 화질", font=self.font_label, text_color="#334155")
+        self.video_quality_label.grid(row=1, column=0, padx=(16, 12), pady=(8, 14), sticky="w")
+        self.video_quality_combo = ctk.CTkComboBox(
+            option_box,
+            values=VIDEO_QUALITY_CHOICES,
+            variable=self.video_quality_var,
+            height=34,
+            width=108,
+            state="readonly",
+            font=self.font_input,
+            dropdown_font=self.font_input,
+            border_color="#94a3b8",
+            button_color="#9ca3af",
+        )
+        self.video_quality_combo.grid(row=1, column=1, padx=(0, 18), pady=(8, 14), sticky="w")
+        self.audio_quality_label = ctk.CTkLabel(option_box, text="소리 품질", font=self.font_label, text_color="#334155")
+        self.audio_quality_label.grid(row=1, column=2, padx=(0, 12), pady=(8, 14), sticky="e")
+        self.audio_quality_combo = ctk.CTkComboBox(
+            option_box,
+            values=AUDIO_QUALITY_CHOICES,
+            variable=self.audio_quality_var,
+            height=34,
+            width=108,
+            state="readonly",
+            font=self.font_input,
+            dropdown_font=self.font_input,
+            border_color="#94a3b8",
+            button_color="#9ca3af",
+        )
+        self.audio_quality_combo.grid(row=1, column=3, padx=(0, 16), pady=(8, 14), sticky="e")
+
+        folder_row = ctk.CTkFrame(card, fg_color="transparent")
+        folder_row.grid(row=4, column=0, padx=22, pady=(0, 12), sticky="ew")
+        folder_row.grid_columnconfigure(0, weight=1)
+        self.output_dir_entry = ctk.CTkEntry(
+            folder_row,
+            textvariable=self.output_dir_var,
+            height=40,
+            font=self.font_input,
+            corner_radius=7,
+        )
+        self.output_dir_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.output_dir_button = ctk.CTkButton(
+            folder_row,
+            text="변경",
+            width=78,
+            height=40,
+            corner_radius=7,
+            font=self.font_button,
+            fg_color=self.primary_color,
+            hover_color=self.primary_hover,
+            command=self._choose_output_dir,
+        )
+        self.output_dir_button.grid(row=0, column=1, padx=(0, 8))
+        self.open_selected_output_button = ctk.CTkButton(
+            folder_row,
+            text="열기",
+            width=78,
+            height=40,
+            corner_radius=7,
+            font=self.font_button,
+            fg_color="#f1f5f9",
+            hover_color="#e2e8f0",
+            text_color="#334155",
+            command=self._open_selected_output_dir,
+        )
+        self.open_selected_output_button.grid(row=0, column=2)
+
+        advanced_header = ctk.CTkFrame(card, fg_color="#f8fafc", corner_radius=8)
+        advanced_header.grid(row=5, column=0, padx=22, pady=(0, 10), sticky="ew")
+        advanced_header.grid_columnconfigure(0, weight=1)
+        self.advanced_button = ctk.CTkButton(
+            advanced_header,
+            text="",
+            height=38,
+            corner_radius=7,
+            font=self.font_label,
+            fg_color="#f8fafc",
+            hover_color="#eef2f7",
+            text_color="#334155",
+            anchor="w",
+            command=self._toggle_advanced_options,
+        )
+        self.advanced_button.grid(row=0, column=0, padx=(8, 0), pady=8, sticky="ew")
+        self.advanced_chevron = ChevronIcon(advanced_header, size=18, color="#64748b", bg="#f8fafc")
+        self.advanced_chevron.grid(row=0, column=1, padx=(4, 14), pady=8, sticky="e")
+        self.advanced_chevron.bind("<Button-1>", lambda _event: self._toggle_advanced_options())
+
+        self.advanced_box = ctk.CTkFrame(card, fg_color="#f6f8fb", corner_radius=8)
+        self.advanced_box.grid(row=6, column=0, padx=22, pady=(0, 12), sticky="ew")
+        self.advanced_box.grid_columnconfigure(1, weight=1)
+        self.cookies_switch = ctk.CTkSwitch(
+            self.advanced_box,
+            text="브라우저 로그인 정보 사용",
+            variable=self.use_cookies_var,
+            font=self.font_label,
+            text_color="#334155",
+            progress_color=self.primary_color,
+            command=self._refresh_cookie_mode,
+        )
+        self.cookies_switch.grid(row=0, column=0, padx=16, pady=(14, 7), sticky="w")
+        self.cookie_browser_combo = ctk.CTkComboBox(
+            self.advanced_box,
+            values=BROWSER_CHOICES,
+            variable=self.cookie_browser_var,
+            height=34,
+            width=120,
+            state="readonly",
+            font=self.font_input,
+            dropdown_font=self.font_input,
+            border_color="#94a3b8",
+            button_color="#9ca3af",
+        )
+        self.cookie_browser_combo.grid(row=0, column=1, padx=16, pady=(14, 7), sticky="e")
+        cookie_helper = self._helper_label(
+            self.advanced_box,
+            "Instagram 로그인이 필요한 릴스는 PC 브라우저에 로그인된 상태면 더 잘 받아집니다.",
+            1,
+            wraplength=360,
+        )
+        cookie_helper.grid_configure(columnspan=2)
+
+        self.selection_summary_label = ctk.CTkLabel(
+            card,
+            text="영상 또는 소리 중 하나 이상을 선택해 주세요.",
+            font=self.font_label,
+            text_color="#be123c",
+            anchor="w",
+            fg_color="#fff1f2",
+            corner_radius=8,
+            padx=14,
+            pady=9,
+        )
+        self.selection_summary_label.grid(row=7, column=0, padx=22, pady=(0, 10), sticky="ew")
+
+        self.add_button = ctk.CTkButton(
+            card,
+            text="큐에 추가하고 추출 시작",
+            height=50,
+            corner_radius=8,
+            font=self.font_button,
+            fg_color=self.primary_color,
+            hover_color=self.primary_hover,
+            text_color="#ffffff",
+            command=self._enqueue_from_input,
+        )
+        self.add_button.grid(row=8, column=0, padx=22, pady=(0, 22), sticky="ew")
+        return card
 
     def _link_card(self, parent: ctk.CTkBaseClass) -> ctk.CTkFrame:
         card = self._card(parent, "1. 링크")
@@ -546,7 +787,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
 
         self.open_output_button = ctk.CTkButton(
             parent,
-            text="최근 저장 폴더 열기",
+            text="저장 폴더 열기",
             height=42,
             corner_radius=8,
             font=self.font_button,
@@ -581,7 +822,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.url_text.delete("1.0", "end")
 
     def _get_url_text(self) -> str:
-        return self.url_text.get("1.0", "end").strip()
+        return " ".join(self.url_text.get("1.0", "end").split())
 
     def _choose_output_dir(self) -> None:
         initial = self.output_dir_var.get().strip() or str(default_output_dir())
@@ -612,7 +853,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
 
         audio_quality = self.audio_quality_var.get().strip()
         if audio_quality not in AUDIO_QUALITY_CHOICES:
-            audio_quality = "192"
+            audio_quality = "320"
             self.audio_quality_var.set(audio_quality)
 
         video_quality = self._video_quality_setting()
@@ -634,7 +875,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
 
     def _enqueue_from_input(self) -> None:
         if not self.include_video_var.get() and not self.include_audio_var.get():
-            messagebox.showwarning("저장할 내용 필요", "영상 또는 소리 중 하나는 선택해야 합니다.")
+            messagebox.showwarning("저장할 내용 필요", "영상 또는 소리 중 하나 이상을 선택해 주세요.")
             return
 
         source_text = self._get_url_text()
@@ -643,37 +884,32 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             messagebox.showwarning("링크 필요", "YouTube 또는 Instagram 링크를 입력해 주세요.")
             return
 
-        supported = [url for url in urls if YouTubeInstagramMediaPipeline.is_supported_url(url)]
-        skipped = len(urls) - len(supported)
-        if not supported:
+        source = urls[0]
+        if not YouTubeInstagramMediaPipeline.is_supported_url(source):
             messagebox.showwarning("지원하지 않는 링크", "YouTube 영상/Shorts 또는 Instagram 릴스/게시물 링크만 사용할 수 있습니다.")
             return
 
         settings = self._collect_settings()
         media_label = self._media_selection_label(settings.include_video, settings.include_audio)
-        for url in supported:
-            job = QueuedJob(
-                id=self.next_job_id,
-                url=url,
-                settings=AppSettings(
-                    output_dir=settings.output_dir,
-                    output_dir_custom=settings.output_dir_custom,
-                    output_format=settings.output_format,
-                    include_video=settings.include_video,
-                    include_audio=settings.include_audio,
-                    audio_quality=settings.audio_quality,
-                    video_quality=settings.video_quality,
-                    use_browser_cookies=settings.use_browser_cookies,
-                    cookie_browser=settings.cookie_browser,
-                ),
-                media_label=media_label,
-            )
-            self.next_job_id += 1
-            self.queue_items.append(job)
-            self._append_log(f"큐 추가 #{job.id}: {job.media_label} · {job.url}")
-
-        if skipped:
-            self._append_log(f"지원하지 않는 링크 {skipped}개는 건너뛰었습니다.")
+        job = QueuedJob(
+            id=self.next_job_id,
+            url=source,
+            settings=AppSettings(
+                output_dir=settings.output_dir,
+                output_dir_custom=settings.output_dir_custom,
+                output_format=settings.output_format,
+                include_video=settings.include_video,
+                include_audio=settings.include_audio,
+                audio_quality=settings.audio_quality,
+                video_quality=settings.video_quality,
+                use_browser_cookies=settings.use_browser_cookies,
+                cookie_browser=settings.cookie_browser,
+            ),
+            media_label=media_label,
+        )
+        self.next_job_id += 1
+        self.queue_items.append(job)
+        self._append_log(f"큐 추가 #{job.id}: {job.media_label} · {job.url}")
 
         self._clear_url_input()
         self._refresh_queue()
@@ -885,10 +1121,11 @@ class YouTubeInstagramMediaApp(ctk.CTk):
 
         label = self._media_selection_label(include_video, include_audio)
         if label == "선택 필요":
-            self.selection_summary_label.configure(text="영상 또는 소리 중 하나를 선택해 주세요.", text_color="#be123c", fg_color="#fff1f2")
+            self.selection_summary_label.configure(text="영상 또는 소리 중 하나 이상을 선택해 주세요.", text_color="#be123c", fg_color="#fff1f2")
+            self.selection_summary_label.grid()
             self.add_button.configure(state="disabled", fg_color=self.disabled_color, hover_color=self.disabled_color, text_color_disabled=self.disabled_text)
         else:
-            self.selection_summary_label.configure(text=f"{label}로 저장합니다.", text_color="#334155", fg_color="#f8fafc")
+            self.selection_summary_label.grid_remove()
             self.add_button.configure(state="normal", fg_color=self.primary_color, hover_color=self.primary_hover, text_color="#ffffff")
 
     def _toggle_advanced_options(self) -> None:
@@ -899,8 +1136,9 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         if not hasattr(self, "advanced_box"):
             return
         enabled_text = "켜짐" if self.use_cookies_var.get() else "꺼짐"
-        arrow = "접기" if self.advanced_options_open else "설정 보기"
-        self.advanced_button.configure(text=f"브라우저 로그인 정보: {enabled_text} · {arrow}")
+        self.advanced_button.configure(text=f"브라우저 로그인 정보: {enabled_text}")
+        if hasattr(self, "advanced_chevron"):
+            self.advanced_chevron.set_open(self.advanced_options_open)
         if self.advanced_options_open:
             self.advanced_box.grid()
         else:
