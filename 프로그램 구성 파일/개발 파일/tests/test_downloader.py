@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from youtube_instagram_media_extractor.downloader import YouTubeInstagramMediaPipeline, unique_dir, unique_path
+from youtube_instagram_media_extractor.downloader import MEDIA_AUDIO_ONLY, MEDIA_VIDEO_AUDIO, MEDIA_VIDEO_ONLY, YouTubeInstagramMediaPipeline, unique_dir, unique_path
+from youtube_instagram_media_extractor.settings import AppSettings
 from youtube_instagram_media_extractor.utils import sanitize_filename
 
 
@@ -65,3 +66,18 @@ def test_rename_screenshots_with_timecodes(tmp_path: Path):
 
     assert (tmp_path / "0001_00-00-00.jpg").exists()
     assert (tmp_path / "0002_00-00-01.jpg").exists()
+
+
+def test_media_mode_follows_video_and_audio_flags():
+    assert YouTubeInstagramMediaPipeline(AppSettings(include_video=True, include_audio=True))._media_mode() == MEDIA_VIDEO_AUDIO
+    assert YouTubeInstagramMediaPipeline(AppSettings(include_video=True, include_audio=False))._media_mode() == MEDIA_VIDEO_ONLY
+    assert YouTubeInstagramMediaPipeline(AppSettings(include_video=False, include_audio=True))._media_mode() == MEDIA_AUDIO_ONLY
+
+
+def test_video_format_selector_respects_quality_and_audio_choice():
+    pipeline = YouTubeInstagramMediaPipeline(AppSettings(include_video=True, include_audio=False, video_quality="720"))
+
+    selector = pipeline._video_format_selector(include_audio=False)
+
+    assert "[height<=720]" in selector
+    assert "+ba" not in selector

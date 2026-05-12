@@ -14,6 +14,9 @@ from youtube_instagram_media_extractor.utils import find_ffmpeg, get_media_durat
 
 ProgressCallback = Callable[[str, float, str], None]
 OUTPUT_FORMATS = {"MP3", "MP4"}
+MEDIA_AUDIO_ONLY = "AUDIO_ONLY"
+MEDIA_VIDEO_AUDIO = "VIDEO_AUDIO"
+MEDIA_VIDEO_ONLY = "VIDEO_ONLY"
 
 
 class UserFacingError(RuntimeError):
@@ -34,7 +37,8 @@ class YouTubeInstagramMediaPipeline:
         self.settings = settings
         self.progress = progress or (lambda _message, _percent, _detail: None)
         self.ffmpeg = find_ffmpeg()
-        self.active_output_format = self._normalized_output_format()
+        self.active_media_mode = self._media_mode()
+        self.active_output_format = self._output_format_for_mode(self.active_media_mode)
         self.active_url = ""
 
     def run(self, url: str) -> DownloadResult:
@@ -50,13 +54,16 @@ class YouTubeInstagramMediaPipeline:
         output_root = Path(self.settings.output_dir).expanduser().resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         started = datetime.now().strftime("%y%m%d%H%M%S")
-        output_format = self._normalized_output_format()
+        media_mode = self._media_mode()
+        output_format = self._output_format_for_mode(media_mode)
         self.active_output_format = output_format
+        self.active_media_mode = media_mode
 
         self.progress("준비 중", 0.03, f"저장 폴더를 확인했습니다: {output_root}")
-        if output_format == "MP4":
-            media_path, title, final_dir, screenshot_dir = self._download_mp4(url, started, output_root)
-            done_detail = f"MP4와 스크린샷 저장 완료: {final_dir}"
+        if media_mode in {MEDIA_VIDEO_AUDIO, MEDIA_VIDEO_ONLY}:
+            include_audio = media_mode == MEDIA_VIDEO_AUDIO
+            media_path, title, final_dir, screenshot_dir = self._download_mp4(url, started, output_root, include_audio)
+            done_detail = f"{self._mode_label(media_mode)}와 스크린샷 저장 완료: {final_dir}"
             result_output_dir = final_dir
         else:
             media_path, title = self._download_mp3(url, started, output_root)
@@ -77,6 +84,29 @@ class YouTubeInstagramMediaPipeline:
     def _normalized_output_format(self) -> str:
         output_format = str(getattr(self.settings, "output_format", "MP3") or "MP3").strip().upper()
         return output_format if output_format in OUTPUT_FORMATS else "MP3"
+
+    def _media_mode(self) -> str:
+        include_video = bool(getattr(self.settings, "include_video", False))
+        include_audio = bool(getattr(self.settings, "include_audio", True))
+        if include_video and include_audio:
+            return MEDIA_VIDEO_AUDIO
+        if include_video:
+            return MEDIA_VIDEO_ONLY
+        if include_audio:
+            return MEDIA_AUDIO_ONLY
+        raise UserFacingError("영상 또는 소리 중 하나는 선택해야 합니다.")
+
+    @staticmethod
+    def _output_format_for_mode(media_mode: str) -> str:
+        return "MP4" if media_mode in {MEDIA_VIDEO_AUDIO, MEDIA_VIDEO_ONLY} else "MP3"
+
+    @staticmethod
+    def _mode_label(media_mode: str) -> str:
+        if media_mode == MEDIA_VIDEO_AUDIO:
+            return "영상+소리 MP4"
+        if media_mode == MEDIA_VIDEO_ONLY:
+            return "무음 MP4"
+        return "MP3"
 
     @staticmethod
     def is_supported_url(url: str) -> bool:
@@ -125,12 +155,12 @@ class YouTubeInstagramMediaPipeline:
             media_path = final_path
         return media_path.resolve(), title
 
-    def _download_mp4(self, url: str, started: str, output_root: Path) -> tuple[Path, str, Path, Path]:
+    def _download_mp4(self, url: str, started: str, output_root: Path, include_audio: bool) -> tuple[Path, str, Path, Path]:
         yt_dlp = self._import_ytdlp()
         ydl_opts = self._base_ytdlp_opts(started, output_root)
         ydl_opts.update(
             {
-                "format": "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best[ext=mp4]/best",
+                "format": self._video_format_selector(include_audio),
                 "format_sort": ["vcodec:h264", "acodec:aac", "res", "fps"],
                 "merge_output_format": "mp4",
                 "postprocessors": [
@@ -142,7 +172,8 @@ class YouTubeInstagramMediaPipeline:
             }
         )
 
-        self.progress("영상 다운로드 중", 0.08, f"{self._source_label(url)} 영상을 MP4로 저장할 준비를 합니다.")
+        mode_text = "소리 포함 MP4" if include_audio else "무음 MP4"
+        self.progress("영상 다운로드 중", 0.08, f"{self._source_label(url)} 영상을 {mode_text}로 저장할 준비를 합니다.")
         info = self._extract_with_ytdlp(yt_dlp, url, ydl_opts)
         title = self._best_source_title(info)
         downloaded_path = self._find_downloaded_file(output_root, started, ".mp4")
@@ -153,9 +184,55 @@ class YouTubeInstagramMediaPipeline:
         final_dir.mkdir(parents=True, exist_ok=True)
         final_path = unique_path(final_dir / f"{sanitize_filename(title)}.mp4")
         downloaded_path.replace(final_path)
+        if not include_audio:
+            final_path = self._strip_audio(final_path)
         self.progress("스크린샷 캡처 중", 0.94, "MP4에서 1초 간격으로 화면을 캡처합니다.")
         screenshot_dir = self._capture_screenshots(final_path, final_dir)
         return final_path.resolve(), title, final_dir.resolve(), screenshot_dir.resolve()
+
+    def _video_format_selector(self, include_audio: bool) -> str:
+        height = self._video_height_filter()
+        video_mp4 = f"bv*{height}[ext=mp4]"
+        video_any = f"bv*{height}"
+        best_mp4 = f"b{height}[ext=mp4]"
+        best_any = f"best{height}"
+        if include_audio:
+            return f"{video_mp4}+ba[ext=m4a]/{video_any}+ba/{best_mp4}/{best_any}/best"
+        return f"{video_mp4}/{video_any}/bestvideo{height}/{best_mp4}/{best_any}/best"
+
+    def _video_height_filter(self) -> str:
+        quality = self._video_quality()
+        if quality == "best":
+            return ""
+        return f"[height<={quality}]"
+
+    def _strip_audio(self, video_path: Path) -> Path:
+        temp_path = unique_path(video_path.with_name(f"__muted_{video_path.name}"))
+        completed = run_process(
+            [
+                self.ffmpeg,
+                "-y",
+                "-i",
+                video_path,
+                "-map",
+                "0:v:0",
+                "-c:v",
+                "copy",
+                "-an",
+                "-movflags",
+                "+faststart",
+                temp_path,
+            ]
+        )
+        if completed.returncode != 0 or not temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+            raise UserFacingError("무음 MP4로 정리하는 중 오류가 발생했습니다.")
+        video_path.unlink()
+        temp_path.replace(video_path)
+        return video_path
 
     @staticmethod
     def _import_ytdlp() -> object:
@@ -282,7 +359,10 @@ class YouTubeInstagramMediaPipeline:
             self.progress(label, percent, detail)
         elif status == "finished":
             if self.active_output_format == "MP4":
-                self.progress("MP4 정리 중", 0.76, "다운로드가 끝났습니다. 영상과 음성을 병합합니다.")
+                detail = "다운로드가 끝났습니다. 영상 파일을 정리합니다."
+                if self.active_media_mode == MEDIA_VIDEO_AUDIO:
+                    detail = "다운로드가 끝났습니다. 영상과 음성을 병합합니다."
+                self.progress("MP4 정리 중", 0.76, detail)
             else:
                 self.progress("MP3 변환 준비 중", 0.76, "다운로드가 끝났습니다. MP3로 변환합니다.")
 
@@ -351,6 +431,14 @@ class YouTubeInstagramMediaPipeline:
     def _audio_quality(self) -> str:
         quality = str(self.settings.audio_quality or "192").strip()
         return quality if quality in {"128", "192", "256", "320"} else "192"
+
+    def _video_quality(self) -> str:
+        quality = str(getattr(self.settings, "video_quality", "1080") or "1080").strip().lower()
+        if quality.endswith("p"):
+            quality = quality[:-1]
+        if quality in {"best", "2160", "1440", "1080", "720", "480", "360"}:
+            return quality
+        return "1080"
 
     def _source_label(self, url: str) -> str:
         if self.is_instagram_url(url):

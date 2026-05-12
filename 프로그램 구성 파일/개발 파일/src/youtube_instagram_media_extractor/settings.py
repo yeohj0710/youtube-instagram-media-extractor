@@ -13,7 +13,9 @@ DEFAULT_OUTPUT_FOLDER_NAME = "다운로드한 미디어"
 LEGACY_DEFAULT_OUTPUT_FOLDER_NAMES = {"다운로드한 MP3"}
 DEFAULT_OUTPUT_FORMAT = "MP3"
 DEFAULT_AUDIO_QUALITY = "192"
+DEFAULT_VIDEO_QUALITY = "1080"
 OUTPUT_FORMAT_CHOICES = {"MP3", "MP4"}
+VIDEO_QUALITY_CHOICES = {"best", "2160", "1440", "1080", "720", "480", "360"}
 
 
 @dataclass
@@ -21,8 +23,11 @@ class AppSettings:
     output_dir: str = ""
     output_dir_custom: bool = False
     output_format: str = DEFAULT_OUTPUT_FORMAT
+    include_video: bool = True
+    include_audio: bool = True
     audio_quality: str = DEFAULT_AUDIO_QUALITY
-    use_browser_cookies: bool = False
+    video_quality: str = DEFAULT_VIDEO_QUALITY
+    use_browser_cookies: bool = True
     cookie_browser: str = "chrome"
 
 
@@ -93,10 +98,16 @@ def load_settings() -> AppSettings:
         except (OSError, json.JSONDecodeError):
             data = {}
 
+    has_new_media_flags = "include_video" in data or "include_audio" in data
     settings = AppSettings()
     for key, value in data.items():
         if hasattr(settings, key):
             setattr(settings, key, value)
+
+    if not has_new_media_flags:
+        settings.include_video = True
+        settings.include_audio = True
+        settings.use_browser_cookies = True
 
     if not settings.output_dir:
         settings.output_dir = str(default_output_dir())
@@ -109,6 +120,10 @@ def load_settings() -> AppSettings:
         settings.output_format = DEFAULT_OUTPUT_FORMAT
     if str(settings.audio_quality).strip() not in {"128", "192", "256", "320"}:
         settings.audio_quality = DEFAULT_AUDIO_QUALITY
+    settings.video_quality = normalize_video_quality(settings.video_quality)
+    settings.include_video = bool(settings.include_video)
+    settings.include_audio = bool(settings.include_audio)
+    settings.use_browser_cookies = bool(settings.use_browser_cookies)
     return settings
 
 
@@ -123,3 +138,12 @@ def save_settings(settings: AppSettings) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def normalize_video_quality(value: object) -> str:
+    quality = str(value or DEFAULT_VIDEO_QUALITY).strip().lower()
+    if quality in {"best", "최고", "최고화질", "highest"}:
+        return "best"
+    if quality.endswith("p"):
+        quality = quality[:-1]
+    return quality if quality in VIDEO_QUALITY_CHOICES else DEFAULT_VIDEO_QUALITY

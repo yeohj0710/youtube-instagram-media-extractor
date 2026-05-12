@@ -1,7 +1,7 @@
 [project]
 name = "youtube-instagram-media-extractor"
 version = "0.1.0"
-description = "YouTube와 Instagram 링크를 MP3 또는 MP4 파일로 빠르게 저장하는 Windows 데스크톱 앱"
+description = "YouTube와 Instagram 링크를 영상 또는 소리 파일로 빠르게 저장하는 Windows 데스크톱 앱"
 readme = "README.md"
 requires-python = ">=3.11"
 
