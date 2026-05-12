@@ -150,6 +150,14 @@ def test_video_format_selector_respects_quality_and_audio_choice():
     pipeline = YouTubeInstagramMediaPipeline(AppSettings(include_video=True, include_audio=False, video_quality="720"))
 
     selector = pipeline._video_format_selector(include_audio=False)
+    format_sort = pipeline._video_format_sort()
 
-    assert "[height<=720]" in selector
+    assert selector.startswith("bv*[ext=mp4]")
     assert "+ba" not in selector
+    assert "res:720" in format_sort
+
+
+def test_video_format_sort_uses_short_edge_resolution_for_vertical_shorts():
+    pipeline = YouTubeInstagramMediaPipeline(AppSettings(include_video=True, include_audio=True, video_quality="1080"))
+
+    assert pipeline._video_format_sort()[0] == "res:1080"

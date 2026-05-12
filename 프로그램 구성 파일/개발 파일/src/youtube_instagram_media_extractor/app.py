@@ -19,7 +19,7 @@ from youtube_instagram_media_extractor.utils import resource_path
 
 
 PRODUCT_NAME = "YouTube·Instagram 미디어 추출기"
-AUDIO_QUALITY_CHOICES = ["128", "192", "256", "320"]
+AUDIO_QUALITY_CHOICES = ["최고", "320", "256", "192", "128"]
 VIDEO_QUALITY_CHOICES = ["최고", "2160p", "1440p", "1080p", "720p", "480p", "360p"]
 BROWSER_CHOICES = ["chrome", "edge", "firefox", "brave", "whale"]
 URL_RE = re.compile(r"https?://[^\s<>'\"`]+", re.IGNORECASE)
@@ -162,8 +162,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             value=bool(self.settings.capture_screenshots) and bool(self.settings.include_video)
         )
         self.video_quality_var = tk.StringVar(value=self._video_quality_label(self.settings.video_quality))
-        initial_audio_quality = "320" if str(self.settings.audio_quality or "320") == "192" else str(self.settings.audio_quality or "320")
-        self.audio_quality_var = tk.StringVar(value=initial_audio_quality)
+        self.audio_quality_var = tk.StringVar(value=self._audio_quality_label(self.settings.audio_quality))
         self.use_cookies_var = tk.BooleanVar(value=bool(self.settings.use_browser_cookies))
         self.cookie_browser_var = tk.StringVar(value=self.settings.cookie_browser or "chrome")
 
@@ -210,9 +209,10 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         header = ctk.CTkFrame(self, fg_color="#f8fafc", corner_radius=0)
         header.grid(row=0, column=0, sticky="ew")
         header.grid_columnconfigure(0, weight=1)
+        header.grid_columnconfigure(1, weight=0)
 
         title = ctk.CTkLabel(header, text=PRODUCT_NAME, font=self.font_title, text_color="#111827")
-        title.grid(row=0, column=0, padx=32, pady=(24, 4), sticky="w")
+        title.grid(row=0, column=0, padx=(32, 16), pady=(22, 2), sticky="w")
         credit = ctk.CTkLabel(
             header,
             text="developed by yeohj0710",
@@ -223,7 +223,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             padx=10,
             pady=3,
         )
-        credit.grid(row=1, column=0, padx=32, pady=(0, 8), sticky="w")
+        credit.grid(row=0, column=1, padx=(16, 32), pady=(26, 0), sticky="ne")
         credit.configure(cursor="hand2")
         credit.bind("<Button-1>", lambda _event: self._open_developer_profile())
         subtitle = ctk.CTkLabel(
@@ -232,7 +232,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             font=self.font_subtitle,
             text_color="#475569",
         )
-        subtitle.grid(row=2, column=0, padx=32, pady=(0, 22), sticky="w")
+        subtitle.grid(row=1, column=0, columnspan=2, padx=32, pady=(4, 18), sticky="w")
 
         body = ctk.CTkFrame(self, fg_color="#edf1f6", corner_radius=0)
         body.grid(row=1, column=0, sticky="nsew")
@@ -312,6 +312,8 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             text_color="#111827",
             wrap="none",
             undo=True,
+            padx=8,
+            pady=9,
             activate_scrollbars=False,
         )
         self.url_text.grid(row=0, column=1, padx=(0, 16), pady=12, sticky="ew")
@@ -882,10 +884,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             include_audio = True
         capture_screenshots = bool(self.capture_screenshots_var.get()) and include_video
 
-        audio_quality = self.audio_quality_var.get().strip()
-        if audio_quality not in AUDIO_QUALITY_CHOICES:
-            audio_quality = "320"
-            self.audio_quality_var.set(audio_quality)
+        audio_quality = self._audio_quality_setting()
 
         video_quality = self._video_quality_setting()
         output_format = "MP4" if include_video else "MP3"
@@ -1239,6 +1238,23 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         if quality.endswith("p"):
             quality = quality[:-1]
         return f"{quality}p" if quality in {"2160", "1440", "1080", "720", "480", "360"} else "1080p"
+
+    @staticmethod
+    def _audio_quality_label(value: object) -> str:
+        quality = str(value or "320").strip().lower()
+        if quality in {"best", "최고", "최고품질", "320"}:
+            return "최고"
+        return quality if quality in {"256", "192", "128"} else "최고"
+
+    def _audio_quality_setting(self) -> str:
+        label = self.audio_quality_var.get().strip().lower()
+        if label in {"최고", "best", "최고품질"}:
+            self.audio_quality_var.set("최고")
+            return "320"
+        if label in {"320", "256", "192", "128"}:
+            return label
+        self.audio_quality_var.set("최고")
+        return "320"
 
     def _video_quality_setting(self) -> str:
         label = self.video_quality_var.get().strip().lower()

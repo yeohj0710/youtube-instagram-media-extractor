@@ -90,8 +90,6 @@ def draw_polygon(img: Image, points: tuple[tuple[float, float], ...], color: Col
 
 
 def render(size: int) -> Image:
-    if size <= 24:
-        return render_small(size)
     return render_large(size)
 
 

@@ -176,7 +176,7 @@ class YouTubeInstagramMediaPipeline:
         ydl_opts.update(
             {
                 "format": self._video_format_selector(include_audio),
-                "format_sort": ["vcodec:h264", "acodec:aac", "res", "fps"],
+                "format_sort": self._video_format_sort(),
                 "merge_output_format": "mp4",
                 "postprocessors": [
                     {
@@ -210,20 +210,19 @@ class YouTubeInstagramMediaPipeline:
         return final_path.resolve(), title, output_root.resolve(), screenshot_dir.resolve() if screenshot_dir else None
 
     def _video_format_selector(self, include_audio: bool) -> str:
-        height = self._video_height_filter()
-        video_mp4 = f"bv*{height}[ext=mp4]"
-        video_any = f"bv*{height}"
-        best_mp4 = f"b{height}[ext=mp4]"
-        best_any = f"best{height}"
+        video_mp4 = "bv*[ext=mp4]"
+        video_any = "bv*"
+        best_mp4 = "b[ext=mp4]"
+        best_any = "best"
         if include_audio:
             return f"{video_mp4}+ba[ext=m4a]/{video_any}+ba/{best_mp4}/{best_any}/best"
-        return f"{video_mp4}/{video_any}/bestvideo{height}/{best_mp4}/{best_any}/best"
+        return f"{video_mp4}/{video_any}/bestvideo[ext=mp4]/bestvideo/{best_mp4}/{best_any}/best"
 
-    def _video_height_filter(self) -> str:
+    def _video_format_sort(self) -> list[str]:
         quality = self._video_quality()
         if quality == "best":
-            return ""
-        return f"[height<={quality}]"
+            return ["res", "fps", "vcodec:h264", "acodec:aac", "br"]
+        return [f"res:{quality}", "fps", "vcodec:h264", "acodec:aac", "br"]
 
     def _strip_audio(self, video_path: Path) -> Path:
         temp_path = unique_path(video_path.with_name(f"__muted_{video_path.name}"))
@@ -448,7 +447,9 @@ class YouTubeInstagramMediaPipeline:
             path.rename(target)
 
     def _audio_quality(self) -> str:
-        quality = str(self.settings.audio_quality or "320").strip()
+        quality = str(self.settings.audio_quality or "320").strip().lower()
+        if quality in {"best", "최고", "최고품질"}:
+            return "320"
         return quality if quality in {"128", "192", "256", "320"} else "320"
 
     def _video_quality(self) -> str:
