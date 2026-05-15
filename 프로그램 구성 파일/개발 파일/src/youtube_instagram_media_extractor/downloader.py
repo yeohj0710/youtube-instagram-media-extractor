@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,42 @@ OUTPUT_FORMATS = {"MP3", "MP4"}
 MEDIA_AUDIO_ONLY = "AUDIO_ONLY"
 MEDIA_VIDEO_AUDIO = "VIDEO_AUDIO"
 MEDIA_VIDEO_ONLY = "VIDEO_ONLY"
+CHROMIUM_BASED_BROWSERS = {"brave", "chrome", "chromium", "edge", "opera", "vivaldi", "whale"}
+AUDIO_EXTENSIONS = {
+    ".aac",
+    ".aif",
+    ".aiff",
+    ".amr",
+    ".caf",
+    ".flac",
+    ".m4a",
+    ".m4b",
+    ".mp3",
+    ".oga",
+    ".ogg",
+    ".opus",
+    ".wav",
+    ".wma",
+}
+VIDEO_EXTENSIONS = {
+    ".3g2",
+    ".3gp",
+    ".avi",
+    ".flv",
+    ".m2ts",
+    ".m4v",
+    ".mkv",
+    ".mov",
+    ".mp4",
+    ".mpeg",
+    ".mpg",
+    ".mts",
+    ".ogv",
+    ".ts",
+    ".webm",
+    ".wmv",
+}
+MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 
 
 class UserFacingError(RuntimeError):
@@ -41,16 +78,10 @@ class YouTubeInstagramMediaPipeline:
         self.active_output_format = self._output_format_for_mode(self.active_media_mode)
         self.active_url = ""
 
-    def run(self, url: str) -> DownloadResult:
-        url = url.strip()
-        if not url:
-            raise UserFacingError("YouTube 또는 Instagram 링크를 입력해 주세요.")
-        if not url.lower().startswith(("http://", "https://")):
-            raise UserFacingError("링크는 http:// 또는 https://로 시작해야 합니다.")
-        if not self.is_supported_url(url):
-            raise UserFacingError("YouTube 영상/Shorts 또는 Instagram 릴스/게시물 링크만 사용할 수 있습니다.")
-
-        self.active_url = url
+    def run(self, source: str) -> DownloadResult:
+        source = source.strip()
+        if not source:
+            raise UserFacingError("YouTube/Instagram 링크 또는 내 컴퓨터 미디어 파일을 입력해 주세요.")
         output_root = Path(self.settings.output_dir).expanduser().resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         started = datetime.now().strftime("%y%m%d%H%M%S")
@@ -60,6 +91,41 @@ class YouTubeInstagramMediaPipeline:
         self.active_media_mode = media_mode
 
         self.progress("준비 중", 0.03, f"저장 폴더를 확인했습니다: {output_root}")
+        if self.is_url(source):
+            if not self.is_supported_url(source):
+                raise UserFacingError("YouTube 영상/Shorts 또는 Instagram 릴스/게시물 링크만 사용할 수 있습니다.")
+            self.active_url = source
+            media_path, title, result_output_dir, screenshot_dir, done_detail = self._run_online_source(
+                source,
+                started,
+                output_root,
+                media_mode,
+            )
+        else:
+            media_path, title, result_output_dir, screenshot_dir, output_format, done_detail = self._run_local_source(
+                source,
+                started,
+                output_root,
+                media_mode,
+            )
+
+        self._cleanup_extra_outputs(output_root, started, media_path)
+        self.progress("완료", 1.0, done_detail)
+        return DownloadResult(
+            output_dir=result_output_dir,
+            media_path=media_path,
+            title=title,
+            output_format=output_format,
+            screenshot_dir=screenshot_dir,
+        )
+
+    def _run_online_source(
+        self,
+        url: str,
+        started: str,
+        output_root: Path,
+        media_mode: str,
+    ) -> tuple[Path, str, Path, Path | None, str]:
         if media_mode in {MEDIA_VIDEO_AUDIO, MEDIA_VIDEO_ONLY}:
             include_audio = media_mode == MEDIA_VIDEO_AUDIO
             capture_screenshots = bool(getattr(self.settings, "capture_screenshots", False))
@@ -78,16 +144,175 @@ class YouTubeInstagramMediaPipeline:
             screenshot_dir = None
             result_output_dir = output_root
             done_detail = f"MP3 저장 완료: {media_path}"
+        return media_path, title, result_output_dir, screenshot_dir, done_detail
 
-        self._cleanup_extra_outputs(output_root, started, media_path)
-        self.progress("완료", 1.0, done_detail)
-        return DownloadResult(
-            output_dir=result_output_dir,
-            media_path=media_path,
-            title=title,
-            output_format=output_format,
-            screenshot_dir=screenshot_dir,
+    def _run_local_source(
+        self,
+        source: str,
+        started: str,
+        output_root: Path,
+        media_mode: str,
+    ) -> tuple[Path, str, Path, Path | None, str, str]:
+        source_path = Path(source).expanduser().resolve()
+        if not source_path.exists() or not source_path.is_file():
+            raise UserFacingError(f"선택한 미디어 파일을 찾을 수 없습니다.\n\n{source_path}")
+
+        suffix = source_path.suffix.lower()
+        if suffix not in MEDIA_EXTENSIONS:
+            raise UserFacingError("지원하는 영상 또는 오디오 파일을 선택해 주세요.")
+
+        title = source_path.stem
+        if suffix in AUDIO_EXTENSIONS:
+            if media_mode == MEDIA_VIDEO_ONLY:
+                raise UserFacingError("오디오 파일에는 영상이 없어서 '소리' 저장도 선택해 주세요.")
+            self.active_output_format = "MP3"
+            self.active_media_mode = MEDIA_AUDIO_ONLY
+            media_path = self._save_local_audio_as_mp3(source_path, started, output_root, title)
+            return (
+                media_path,
+                title,
+                output_root.resolve(),
+                None,
+                "MP3",
+                f"로컬 오디오 MP3 저장 완료: {media_path}",
+            )
+
+        if media_mode == MEDIA_AUDIO_ONLY:
+            media_path = self._extract_local_video_audio(source_path, started, output_root, title)
+            return (
+                media_path,
+                title,
+                output_root.resolve(),
+                None,
+                "MP3",
+                f"로컬 영상에서 MP3 저장 완료: {media_path}",
+            )
+
+        include_audio = media_mode == MEDIA_VIDEO_AUDIO
+        capture_screenshots = bool(getattr(self.settings, "capture_screenshots", False))
+        media_path = self._save_local_video_as_mp4(source_path, started, output_root, title, include_audio)
+        screenshot_dir: Path | None = None
+        if capture_screenshots:
+            screenshot_dir = self._screenshot_output_dir(output_root, title)
+            screenshot_dir.mkdir(parents=True, exist_ok=True)
+            self.progress("스크린샷 캡처 중", 0.94, "로컬 영상에서 1초 간격으로 화면을 캡처합니다.")
+            screenshot_dir = self._capture_screenshots(media_path, screenshot_dir)
+        done_detail = f"{self._mode_label(media_mode)} 저장 완료: {media_path}"
+        if screenshot_dir is not None:
+            done_detail = f"{done_detail}\n스크린샷 저장 완료: {screenshot_dir}"
+        return media_path, title, output_root.resolve(), screenshot_dir.resolve() if screenshot_dir else None, "MP4", done_detail
+
+    @staticmethod
+    def is_url(source: str) -> bool:
+        parsed = urlparse(source.strip())
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+    @staticmethod
+    def is_supported_local_media(source: str) -> bool:
+        return Path(source).suffix.lower() in MEDIA_EXTENSIONS
+
+    def _save_local_audio_as_mp3(self, source_path: Path, started: str, output_root: Path, title: str) -> Path:
+        target = unique_path(output_root / f"{started} {sanitize_filename(title)}.mp3")
+        self.progress("오디오 파일 저장 중", 0.12, f"내 컴퓨터 오디오 파일을 저장합니다: {source_path.name}")
+        if source_path.suffix.lower() == ".mp3":
+            shutil.copy2(source_path, target)
+            return target.resolve()
+        return self._convert_audio_to_mp3(source_path, target)
+
+    def _extract_local_video_audio(self, source_path: Path, started: str, output_root: Path, title: str) -> Path:
+        target = unique_path(output_root / f"{started} {sanitize_filename(title)}.mp3")
+        self.progress("오디오 추출 중", 0.12, f"로컬 영상에서 소리만 추출합니다: {source_path.name}")
+        return self._convert_audio_to_mp3(source_path, target)
+
+    def _convert_audio_to_mp3(self, source_path: Path, target: Path) -> Path:
+        completed = run_process(
+            [
+                self.ffmpeg,
+                "-y",
+                "-i",
+                source_path,
+                "-vn",
+                "-codec:a",
+                "libmp3lame",
+                "-b:a",
+                f"{self._audio_quality()}k",
+                target,
+            ]
         )
+        if completed.returncode != 0 or not target.exists():
+            try:
+                target.unlink()
+            except OSError:
+                pass
+            raise UserFacingError("로컬 미디어에서 MP3를 만드는 중 오류가 발생했습니다.")
+        return target.resolve()
+
+    def _save_local_video_as_mp4(
+        self,
+        source_path: Path,
+        started: str,
+        output_root: Path,
+        title: str,
+        include_audio: bool,
+    ) -> Path:
+        target = unique_path(output_root / f"{started} {sanitize_filename(title)}.mp4")
+        mode_text = "소리 포함 MP4" if include_audio else "무음 MP4"
+        self.progress("로컬 영상 저장 중", 0.12, f"내 컴퓨터 영상을 {mode_text}로 저장합니다: {source_path.name}")
+        if include_audio and source_path.suffix.lower() == ".mp4":
+            shutil.copy2(source_path, target)
+            return target.resolve()
+
+        args: list[str | os.PathLike[str]] = [
+            self.ffmpeg,
+            "-y",
+            "-i",
+            source_path,
+            "-map",
+            "0:v:0",
+        ]
+        if include_audio:
+            args.extend(["-map", "0:a?"])
+        args.extend(["-c:v", "copy"])
+        if include_audio:
+            args.extend(["-c:a", "aac"])
+        else:
+            args.append("-an")
+        args.extend(["-movflags", "+faststart", target])
+        completed = run_process(args)
+        if completed.returncode == 0 and target.exists():
+            return target.resolve()
+
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        return self._transcode_local_video_to_mp4(source_path, target, include_audio)
+
+    def _transcode_local_video_to_mp4(self, source_path: Path, target: Path, include_audio: bool) -> Path:
+        args: list[str | os.PathLike[str]] = [
+            self.ffmpeg,
+            "-y",
+            "-i",
+            source_path,
+            "-map",
+            "0:v:0",
+        ]
+        if include_audio:
+            args.extend(["-map", "0:a?"])
+        args.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"])
+        if include_audio:
+            args.extend(["-c:a", "aac", "-b:a", "192k"])
+        else:
+            args.append("-an")
+        args.extend(["-movflags", "+faststart", target])
+        completed = run_process(args)
+        if completed.returncode != 0 or not target.exists():
+            try:
+                target.unlink()
+            except OSError:
+                pass
+            raise UserFacingError("로컬 영상을 MP4로 저장하는 중 오류가 발생했습니다.")
+        return target.resolve()
 
     def _normalized_output_format(self) -> str:
         output_format = str(getattr(self.settings, "output_format", "MP3") or "MP3").strip().upper()
@@ -274,8 +499,11 @@ class YouTubeInstagramMediaPipeline:
             "progress_hooks": [self._download_progress_hook],
             "postprocessor_hooks": [self._postprocessor_progress_hook],
         }
-        if self.settings.use_browser_cookies:
-            opts["cookiesfrombrowser"] = ((self.settings.cookie_browser or "chrome").strip().lower(),)
+        cookie_file = self._cookie_file_path()
+        if cookie_file is not None:
+            opts["cookiefile"] = str(cookie_file)
+        elif self.settings.use_browser_cookies:
+            opts["cookiesfrombrowser"] = self._default_cookie_browser_spec()
         return opts
 
     def _extract_with_ytdlp(self, yt_dlp_module: object, url: str, ydl_opts: dict[str, object]) -> dict[str, object]:
@@ -293,7 +521,7 @@ class YouTubeInstagramMediaPipeline:
                 "로그인이 필요할 수 있어 PC 브라우저에 저장된 쿠키를 자동으로 확인합니다.",
             )
             try:
-                return self._extract_with_browser_cookie_fallback(yt_dlp_module, url, ydl_opts)
+                return self._extract_with_browser_cookie_fallback(yt_dlp_module, url, ydl_opts, exc)
             except Exception as retry_exc:
                 raise self._friendly_download_error(retry_exc, retried_with_cookies=True) from retry_exc
 
@@ -310,24 +538,29 @@ class YouTubeInstagramMediaPipeline:
         yt_dlp_module: object,
         url: str,
         base_opts: dict[str, object],
+        original_error: BaseException | None = None,
     ) -> dict[str, object]:
         tried = set()
         selected = base_opts.get("cookiesfrombrowser")
         if isinstance(selected, tuple) and selected:
-            tried.add(str(selected[0]).lower())
+            tried.add(self._cookie_spec_key(selected))
 
         last_error: Exception | None = None
-        for browser in self._cookie_browser_candidates():
-            if browser in tried:
+        for spec in self._cookie_browser_specs():
+            key = self._cookie_spec_key(spec)
+            if key in tried:
                 continue
-            self.progress("브라우저 쿠키 확인 중", 0.12, f"{browser} 로그인 정보로 다시 시도합니다.")
+            label = self._cookie_spec_label(spec)
+            self.progress("브라우저 쿠키 확인 중", 0.12, f"{label} 로그인 정보로 다시 시도합니다.")
             retry_opts = dict(base_opts)
-            retry_opts["cookiesfrombrowser"] = (browser,)
+            if self._cookie_file_path() is not None and original_error and "failed to load cookies" in str(original_error).lower():
+                retry_opts.pop("cookiefile", None)
+            retry_opts["cookiesfrombrowser"] = spec
             try:
                 return self._extract_once(yt_dlp_module, url, retry_opts)
             except Exception as exc:
                 last_error = exc
-                self.progress("다른 브라우저 확인 중", 0.12, f"{browser} 쿠키로는 다운로드하지 못했습니다.")
+                self.progress("다른 브라우저 확인 중", 0.12, f"{label} 쿠키 실패: {self._brief_error(exc)}")
         if last_error is not None:
             raise last_error
         raise RuntimeError("사용 가능한 브라우저 쿠키 후보가 없습니다.")
@@ -347,8 +580,21 @@ class YouTubeInstagramMediaPipeline:
                 "not available",
                 "for authentication",
                 "private",
+                "decrypt",
+                "dpapi",
+                "cookie database",
             )
         )
+
+    def _cookie_file_path(self) -> Path | None:
+        cookie_file = str(getattr(self.settings, "cookie_file", "") or "").strip()
+        if not cookie_file:
+            return None
+        path = Path(cookie_file).expanduser()
+        return path if path.exists() and path.is_file() else None
+
+    def _default_cookie_browser_spec(self) -> tuple[str, ...]:
+        return ((self.settings.cookie_browser or "chrome").strip().lower(),)
 
     def _cookie_browser_candidates(self) -> list[str]:
         selected = (self.settings.cookie_browser or "chrome").strip().lower()
@@ -360,6 +606,101 @@ class YouTubeInstagramMediaPipeline:
                 candidates.append(browser)
                 seen.add(browser)
         return candidates
+
+    def _cookie_browser_specs(self) -> list[tuple[str, ...]]:
+        specs: list[tuple[str, ...]] = []
+        seen: set[str] = set()
+        for browser in self._cookie_browser_candidates():
+            for spec in self._cookie_specs_for_browser(browser):
+                key = self._cookie_spec_key(spec)
+                if key not in seen:
+                    specs.append(spec)
+                    seen.add(key)
+        return specs
+
+    @classmethod
+    def _cookie_specs_for_browser(cls, browser: str) -> list[tuple[str, ...]]:
+        browser = browser.strip().lower()
+        specs: list[tuple[str, ...]] = [(browser,)]
+        if browser in CHROMIUM_BASED_BROWSERS:
+            root = cls._chromium_user_data_dir(browser)
+            if root and root.exists():
+                for profile in cls._chromium_profile_names(root):
+                    specs.append((browser, profile))
+        elif browser == "firefox":
+            root = cls._firefox_profiles_dir()
+            if root and root.exists():
+                for profile in cls._firefox_profile_paths(root):
+                    specs.append((browser, str(profile)))
+        return specs
+
+    @staticmethod
+    def _chromium_user_data_dir(browser: str) -> Path | None:
+        local = os.getenv("LOCALAPPDATA")
+        roaming = os.getenv("APPDATA")
+        paths = {
+            "brave": Path(local) / "BraveSoftware" / "Brave-Browser" / "User Data" if local else None,
+            "chrome": Path(local) / "Google" / "Chrome" / "User Data" if local else None,
+            "chromium": Path(local) / "Chromium" / "User Data" if local else None,
+            "edge": Path(local) / "Microsoft" / "Edge" / "User Data" if local else None,
+            "opera": Path(roaming) / "Opera Software" / "Opera Stable" if roaming else None,
+            "vivaldi": Path(local) / "Vivaldi" / "User Data" if local else None,
+            "whale": Path(local) / "Naver" / "Naver Whale" / "User Data" if local else None,
+        }
+        return paths.get(browser)
+
+    @staticmethod
+    def _firefox_profiles_dir() -> Path | None:
+        roaming = os.getenv("APPDATA")
+        return Path(roaming) / "Mozilla" / "Firefox" / "Profiles" if roaming else None
+
+    @staticmethod
+    def _chromium_profile_names(root: Path) -> list[str]:
+        profiles = [
+            child.name
+            for child in root.iterdir()
+            if child.is_dir() and ((child / "Network" / "Cookies").exists() or (child / "Cookies").exists())
+        ]
+
+        def sort_key(name: str) -> tuple[int, int, str]:
+            if name == "Default":
+                return (0, 0, name)
+            match = re.fullmatch(r"Profile (\d+)", name)
+            if match:
+                return (1, int(match.group(1)), name)
+            return (2, 0, name.lower())
+
+        return sorted(profiles, key=sort_key)
+
+    @staticmethod
+    def _firefox_profile_paths(root: Path) -> list[Path]:
+        return sorted(
+            (child for child in root.iterdir() if child.is_dir() and (child / "cookies.sqlite").exists()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+
+    @staticmethod
+    def _cookie_spec_key(spec: tuple[object, ...]) -> str:
+        browser = str(spec[0]).lower() if spec else ""
+        profile = str(spec[1]).lower() if len(spec) > 1 and spec[1] else ""
+        return f"{browser}:{profile}"
+
+    @staticmethod
+    def _cookie_spec_label(spec: tuple[object, ...]) -> str:
+        browser = str(spec[0]) if spec else "browser"
+        if len(spec) <= 1 or not spec[1]:
+            return browser
+        profile = Path(str(spec[1])).name
+        return f"{browser}/{profile}"
+
+    @staticmethod
+    def _brief_error(error: BaseException, max_length: int = 120) -> str:
+        text = " ".join(str(error).split())
+        if not text:
+            text = error.__class__.__name__
+        return text if len(text) <= max_length else f"{text[: max_length - 3]}..."
+
 
     def _download_progress_hook(self, payload: dict[str, object]) -> None:
         status = payload.get("status")
@@ -563,10 +904,11 @@ class YouTubeInstagramMediaPipeline:
         media_word = "영상을" if self.active_output_format == "MP4" else "오디오를"
         if self.is_instagram_url(self.active_url):
             if retried_with_cookies or self.settings.use_browser_cookies:
+                extra_help = self._instagram_cookie_help(error)
                 return UserFacingError(
                     f"Instagram에서 이 {media_word} 바로 다운로드하지 못했습니다.\n\n"
                     "PC 브라우저 쿠키로 다시 시도했지만 로그인 정보가 없거나 Instagram이 요청을 막았습니다.\n\n"
-                    "Chrome 또는 Edge에서 Instagram에 로그인되어 있는지 확인한 뒤 다시 시도해 주세요."
+                    f"{extra_help}"
                 )
             return UserFacingError(
                 f"Instagram에서 이 {media_word} 다운로드하지 못했습니다.\n\n"
@@ -586,6 +928,19 @@ class YouTubeInstagramMediaPipeline:
         return UserFacingError(
             f"YouTube {media_word} 다운로드하지 못했습니다.\n\n"
             "링크가 올바른지, 영상이 삭제/비공개 상태가 아닌지 확인한 뒤 다시 시도해 주세요."
+        )
+
+    @staticmethod
+    def _instagram_cookie_help(error: BaseException) -> str:
+        lowered = str(error).lower()
+        if "dpapi" in lowered or "decrypt" in lowered or "mac check failed" in lowered:
+            return (
+                "Chrome/Edge의 쿠키 암호화 때문에 자동 쿠키 읽기가 막힌 것으로 보입니다.\n"
+                "브라우저 확장 프로그램으로 Instagram cookies.txt를 내보낸 뒤, 고급 옵션의 '쿠키 파일'에 선택해 주세요."
+            )
+        return (
+            "Chrome 또는 Edge에서 Instagram에 로그인되어 있는지 확인해 주세요.\n"
+            "여러 Chrome 프로필을 쓰는 경우 앱이 프로필별로 자동 재시도합니다. 그래도 안 되면 cookies.txt 파일을 선택해 주세요."
         )
 
     @staticmethod

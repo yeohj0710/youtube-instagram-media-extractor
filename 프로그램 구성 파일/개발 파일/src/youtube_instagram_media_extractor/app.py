@@ -13,7 +13,14 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-from youtube_instagram_media_extractor.downloader import DownloadResult, UserFacingError, YouTubeInstagramMediaPipeline
+from youtube_instagram_media_extractor.downloader import (
+    AUDIO_EXTENSIONS,
+    DownloadResult,
+    MEDIA_EXTENSIONS,
+    UserFacingError,
+    VIDEO_EXTENSIONS,
+    YouTubeInstagramMediaPipeline,
+)
 from youtube_instagram_media_extractor.settings import AppSettings, default_output_dir, is_current_default_output_dir, load_settings, save_settings
 from youtube_instagram_media_extractor.utils import resource_path
 
@@ -22,6 +29,11 @@ PRODUCT_NAME = "YouTube·Instagram 미디어 추출기"
 AUDIO_QUALITY_CHOICES = ["최고", "320", "256", "192", "128"]
 VIDEO_QUALITY_CHOICES = ["최고", "2160p", "1440p", "1080p", "720p", "480p", "360p"]
 BROWSER_CHOICES = ["chrome", "edge", "firefox", "brave", "whale"]
+SOURCE_URL_MODE = "링크로 가져오기"
+SOURCE_FILE_MODE = "내 컴퓨터 파일"
+VIDEO_FILE_PATTERN = " ".join(f"*{ext}" for ext in sorted(VIDEO_EXTENSIONS))
+AUDIO_FILE_PATTERN = " ".join(f"*{ext}" for ext in sorted(AUDIO_EXTENSIONS))
+MEDIA_FILE_PATTERN = f"{VIDEO_FILE_PATTERN} {AUDIO_FILE_PATTERN}"
 URL_RE = re.compile(r"https?://[^\s<>'\"`]+", re.IGNORECASE)
 TRAILING_URL_CHARS = ".,;:!?)]}…"
 
@@ -155,6 +167,8 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.is_processing = False
         self.advanced_options_open = False
 
+        self.source_type = tk.StringVar(value=SOURCE_URL_MODE)
+        self.file_var = tk.StringVar()
         self.output_dir_var = tk.StringVar(value=self.settings.output_dir or str(default_output_dir()))
         self.include_video_var = tk.BooleanVar(value=bool(self.settings.include_video))
         self.include_audio_var = tk.BooleanVar(value=bool(self.settings.include_audio))
@@ -165,6 +179,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.audio_quality_var = tk.StringVar(value=self._audio_quality_label(self.settings.audio_quality))
         self.use_cookies_var = tk.BooleanVar(value=bool(self.settings.use_browser_cookies))
         self.cookie_browser_var = tk.StringVar(value=self.settings.cookie_browser or "chrome")
+        self.cookie_file_var = tk.StringVar(value=getattr(self.settings, "cookie_file", ""))
 
         self._configure_typography()
         self._build_ui()
@@ -292,17 +307,36 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         return label
 
     def _settings_card(self, parent: ctk.CTkBaseClass) -> ctk.CTkFrame:
-        card = self._card(parent, "링크와 옵션")
-        self._helper_label(card, "링크 하나를 넣고 옵션을 고른 뒤 큐에 추가합니다. 처리 중에 새 링크를 추가하면 뒤에서 순서대로 실행됩니다.", 1)
+        card = self._card(parent, "가져오기와 옵션")
 
-        input_box = ctk.CTkFrame(card, fg_color="#f6f8fb", corner_radius=8)
-        input_box.grid(row=2, column=0, padx=22, pady=(0, 12), sticky="ew")
-        input_box.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(input_box, text="링크", font=self.font_label, text_color="#334155").grid(
+        ctk.CTkLabel(card, text="가져올 방식", font=self.font_label, text_color="#334155").grid(
+            row=1, column=0, padx=22, pady=(0, 8), sticky="w"
+        )
+        self.source_mode_switch = ctk.CTkSegmentedButton(
+            card,
+            values=[SOURCE_URL_MODE, SOURCE_FILE_MODE],
+            variable=self.source_type,
+            command=lambda _value: self._refresh_source_mode(),
+            height=40,
+            corner_radius=8,
+            font=self.font_button,
+            fg_color="#e2e8f0",
+            selected_color="#93c5fd",
+            selected_hover_color="#60a5fa",
+            unselected_color="#f8fafc",
+            unselected_hover_color="#edf2f7",
+            text_color="#1f2937",
+            text_color_disabled="#94a3b8",
+        )
+        self.source_mode_switch.grid(row=2, column=0, padx=22, pady=(0, 12), sticky="ew")
+
+        self.url_panel = ctk.CTkFrame(card, fg_color="#f6f8fb", corner_radius=8)
+        self.url_panel.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(self.url_panel, text="링크", font=self.font_label, text_color="#334155").grid(
             row=0, column=0, padx=(16, 12), pady=14, sticky="w"
         )
         self.url_text = ctk.CTkTextbox(
-            input_box,
+            self.url_panel,
             height=42,
             font=self.font_input,
             fg_color="#ffffff",
@@ -319,8 +353,50 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.url_text.grid(row=0, column=1, padx=(0, 16), pady=12, sticky="ew")
         self.url_text.bind("<Return>", lambda _event: "break")
 
+        self.file_panel = ctk.CTkFrame(card, fg_color="#f6f8fb", corner_radius=8)
+        self.file_panel.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            self.file_panel,
+            text="내 컴퓨터 영상/오디오 파일",
+            font=self.font_label,
+            text_color="#334155",
+        ).grid(row=0, column=0, padx=16, pady=(16, 7), sticky="w")
+        file_row = ctk.CTkFrame(self.file_panel, fg_color="transparent")
+        file_row.grid(row=1, column=0, padx=16, pady=(0, 16), sticky="ew")
+        file_row.grid_columnconfigure(0, weight=1)
+        self.file_entry = ctk.CTkEntry(
+            file_row,
+            textvariable=self.file_var,
+            placeholder_text="mp4, mov, mkv, m4a, mp3, wav 파일",
+            height=40,
+            font=self.font_input,
+            corner_radius=7,
+        )
+        self.file_entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self.file_button = ctk.CTkButton(
+            file_row,
+            text="파일 선택",
+            width=118,
+            height=40,
+            corner_radius=7,
+            font=self.font_button,
+            fg_color=self.primary_color,
+            hover_color=self.primary_hover,
+            command=self._choose_media_file,
+        )
+        self.file_button.grid(row=0, column=1, sticky="e")
+        ctk.CTkLabel(
+            self.file_panel,
+            text="이미 내려받은 영상은 이 방식으로 넣으면 다운로드 없이 저장/스크린샷 추출을 진행합니다.",
+            font=self.font_label,
+            text_color="#64748b",
+            justify="left",
+            anchor="w",
+            wraplength=520,
+        ).grid(row=2, column=0, padx=16, pady=(0, 14), sticky="ew")
+
         option_box = ctk.CTkFrame(card, fg_color="#f6f8fb", corner_radius=8)
-        option_box.grid(row=3, column=0, padx=22, pady=(0, 12), sticky="ew")
+        option_box.grid(row=4, column=0, padx=22, pady=(0, 12), sticky="ew")
         option_box.grid_columnconfigure(1, weight=1)
         option_box.grid_columnconfigure(3, weight=1)
 
@@ -412,7 +488,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.screenshot_check.grid(row=0, column=1, sticky="w")
 
         folder_row = ctk.CTkFrame(card, fg_color="transparent")
-        folder_row.grid(row=4, column=0, padx=22, pady=(0, 12), sticky="ew")
+        folder_row.grid(row=6, column=0, padx=22, pady=(0, 12), sticky="ew")
         folder_row.grid_columnconfigure(0, weight=1)
         self.output_dir_entry = ctk.CTkEntry(
             folder_row,
@@ -449,7 +525,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.open_selected_output_button.grid(row=0, column=2)
 
         advanced_header = ctk.CTkFrame(card, fg_color="#f8fafc", corner_radius=8)
-        advanced_header.grid(row=5, column=0, padx=22, pady=(0, 10), sticky="ew")
+        advanced_header.grid(row=7, column=0, padx=22, pady=(0, 10), sticky="ew")
         advanced_header.grid_columnconfigure(0, weight=1)
         self.advanced_button = ctk.CTkButton(
             advanced_header,
@@ -469,7 +545,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.advanced_chevron.bind("<Button-1>", lambda _event: self._toggle_advanced_options())
 
         self.advanced_box = ctk.CTkFrame(card, fg_color="#f6f8fb", corner_radius=8)
-        self.advanced_box.grid(row=6, column=0, padx=22, pady=(0, 12), sticky="ew")
+        self.advanced_box.grid(row=8, column=0, padx=22, pady=(0, 12), sticky="ew")
         self.advanced_box.grid_columnconfigure(1, weight=1)
         self.cookies_switch = ctk.CTkSwitch(
             self.advanced_box,
@@ -496,11 +572,50 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.cookie_browser_combo.grid(row=0, column=1, padx=16, pady=(14, 7), sticky="e")
         cookie_helper = self._helper_label(
             self.advanced_box,
-            "Instagram 로그인이 필요한 릴스는 PC 브라우저에 로그인된 상태면 더 잘 받아집니다.",
+            "Instagram 로그인이 필요한 릴스는 PC 브라우저에 로그인된 상태면 더 잘 받아집니다. Chrome 보안 정책 때문에 자동 쿠키가 막히면 cookies.txt 파일을 선택해 주세요.",
             1,
             wraplength=360,
         )
         cookie_helper.grid_configure(columnspan=2)
+
+        self.cookie_file_row = ctk.CTkFrame(self.advanced_box, fg_color="transparent")
+        self.cookie_file_row.grid(row=2, column=0, columnspan=2, padx=16, pady=(0, 14), sticky="ew")
+        self.cookie_file_row.grid_columnconfigure(0, weight=1)
+        self.cookie_file_entry = ctk.CTkEntry(
+            self.cookie_file_row,
+            textvariable=self.cookie_file_var,
+            placeholder_text="선택 사항: Instagram cookies.txt",
+            height=36,
+            font=self.font_input,
+            corner_radius=7,
+        )
+        self.cookie_file_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.cookie_file_button = ctk.CTkButton(
+            self.cookie_file_row,
+            text="쿠키 파일",
+            width=90,
+            height=36,
+            corner_radius=7,
+            font=self.font_button,
+            fg_color="#f1f5f9",
+            hover_color="#e2e8f0",
+            text_color="#334155",
+            command=self._choose_cookie_file,
+        )
+        self.cookie_file_button.grid(row=0, column=1, padx=(0, 8))
+        self.cookie_file_clear_button = ctk.CTkButton(
+            self.cookie_file_row,
+            text="비우기",
+            width=70,
+            height=36,
+            corner_radius=7,
+            font=self.font_button,
+            fg_color="#f8fafc",
+            hover_color="#e2e8f0",
+            text_color="#334155",
+            command=lambda: self.cookie_file_var.set(""),
+        )
+        self.cookie_file_clear_button.grid(row=0, column=2)
 
         self.selection_summary_label = ctk.CTkLabel(
             card,
@@ -513,7 +628,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             padx=14,
             pady=9,
         )
-        self.selection_summary_label.grid(row=7, column=0, padx=22, pady=(0, 10), sticky="ew")
+        self.selection_summary_label.grid(row=9, column=0, padx=22, pady=(0, 10), sticky="ew")
 
         self.add_button = ctk.CTkButton(
             card,
@@ -526,7 +641,8 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             text_color="#ffffff",
             command=self._enqueue_from_input,
         )
-        self.add_button.grid(row=8, column=0, padx=22, pady=(0, 22), sticky="ew")
+        self.add_button.grid(row=10, column=0, padx=22, pady=(0, 22), sticky="ew")
+        self._refresh_source_mode()
         return card
 
     def _link_card(self, parent: ctk.CTkBaseClass) -> ctk.CTkFrame:
@@ -814,7 +930,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             wrap="word",
         )
         self.log_box.grid(row=6, column=0, padx=22, pady=(0, 16), sticky="nsew")
-        self.log_box.insert("end", "YouTube 또는 Instagram 링크를 큐에 추가해 주세요.\n")
+        self.log_box.insert("end", "YouTube/Instagram 링크 또는 내 컴퓨터 파일을 큐에 추가해 주세요.\n")
         self.log_box.configure(state="disabled")
 
         self.open_output_button = ctk.CTkButton(
@@ -855,6 +971,45 @@ class YouTubeInstagramMediaApp(ctk.CTk):
 
     def _get_url_text(self) -> str:
         return " ".join(self.url_text.get("1.0", "end").split())
+
+    def _refresh_source_mode(self) -> None:
+        if not hasattr(self, "url_panel") or not hasattr(self, "file_panel"):
+            return
+        if self.source_type.get() == SOURCE_FILE_MODE:
+            self.url_panel.grid_remove()
+            self.file_panel.grid(row=3, column=0, padx=22, pady=(0, 12), sticky="ew")
+        else:
+            self.file_panel.grid_remove()
+            self.url_panel.grid(row=3, column=0, padx=22, pady=(0, 12), sticky="ew")
+
+    def _is_url_mode(self) -> bool:
+        return self.source_type.get() != SOURCE_FILE_MODE
+
+    def _choose_media_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title="영상 또는 오디오 파일 선택",
+            filetypes=[
+                ("영상/오디오 파일", MEDIA_FILE_PATTERN),
+                ("영상 파일", VIDEO_FILE_PATTERN),
+                ("오디오 파일", AUDIO_FILE_PATTERN),
+                ("모든 파일", "*.*"),
+            ],
+        )
+        if path:
+            self.file_var.set(path)
+            self.source_type.set(SOURCE_FILE_MODE)
+            self._refresh_source_mode()
+
+    def _choose_cookie_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Instagram cookies.txt 선택",
+            filetypes=[
+                ("쿠키 파일", "*.txt *.cookies"),
+                ("모든 파일", "*.*"),
+            ],
+        )
+        if path:
+            self.cookie_file_var.set(path)
 
     def _choose_output_dir(self) -> None:
         initial = self.output_dir_var.get().strip() or str(default_output_dir())
@@ -899,6 +1054,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             video_quality=video_quality,
             use_browser_cookies=bool(self.use_cookies_var.get()),
             cookie_browser=self.cookie_browser_var.get().strip() or "chrome",
+            cookie_file=self.cookie_file_var.get().strip(),
         )
         save_settings(settings)
         self.settings = settings
@@ -909,16 +1065,33 @@ class YouTubeInstagramMediaApp(ctk.CTk):
             messagebox.showwarning("저장할 내용 필요", "영상 또는 소리 중 하나 이상을 선택해 주세요.")
             return
 
-        source_text = self._get_url_text()
-        urls = extract_urls(source_text)
-        if not urls:
-            messagebox.showwarning("링크 필요", "YouTube 또는 Instagram 링크를 입력해 주세요.")
-            return
+        if self._is_url_mode():
+            source_text = self._get_url_text()
+            urls = extract_urls(source_text)
+            if not urls:
+                messagebox.showwarning("링크 필요", "YouTube 또는 Instagram 링크를 입력해 주세요.")
+                return
 
-        source = urls[0]
-        if not YouTubeInstagramMediaPipeline.is_supported_url(source):
-            messagebox.showwarning("지원하지 않는 링크", "YouTube 영상/Shorts 또는 Instagram 릴스/게시물 링크만 사용할 수 있습니다.")
-            return
+            source = urls[0]
+            if not YouTubeInstagramMediaPipeline.is_supported_url(source):
+                messagebox.showwarning("지원하지 않는 링크", "YouTube 영상/Shorts 또는 Instagram 릴스/게시물 링크만 사용할 수 있습니다.")
+                return
+        else:
+            source = self.file_var.get().strip()
+            if not source:
+                messagebox.showwarning("파일 필요", "내 컴퓨터의 영상 또는 오디오 파일을 선택해 주세요.")
+                return
+            source_path = Path(source).expanduser()
+            if not source_path.exists():
+                messagebox.showwarning("파일 확인", "선택한 영상 또는 오디오 파일을 찾을 수 없습니다.")
+                return
+            suffix = source_path.suffix.lower()
+            if suffix not in MEDIA_EXTENSIONS:
+                messagebox.showwarning("지원하지 않는 파일", "지원하는 영상 또는 오디오 파일을 선택해 주세요.")
+                return
+            if suffix in AUDIO_EXTENSIONS and self.include_video_var.get() and not self.include_audio_var.get():
+                messagebox.showwarning("소리 선택 필요", "오디오 파일에는 영상이 없어서 '소리' 저장도 선택해 주세요.")
+                return
 
         settings = self._collect_settings()
         media_label = self._media_selection_label(settings.include_video, settings.include_audio, settings.capture_screenshots)
@@ -936,6 +1109,7 @@ class YouTubeInstagramMediaApp(ctk.CTk):
                 video_quality=settings.video_quality,
                 use_browser_cookies=settings.use_browser_cookies,
                 cookie_browser=settings.cookie_browser,
+                cookie_file=settings.cookie_file,
             ),
             media_label=media_label,
         )
@@ -943,7 +1117,8 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         self.queue_items.append(job)
         self._append_log(f"큐 추가 #{job.id}: {job.media_label} · {job.url}")
 
-        self._clear_url_input()
+        if self._is_url_mode():
+            self._clear_url_input()
         self._refresh_queue()
         self._start_next_job_if_idle()
 
@@ -1265,6 +1440,11 @@ class YouTubeInstagramMediaApp(ctk.CTk):
         return label if label in {"2160", "1440", "1080", "720", "480", "360"} else "1080"
 
     def _short_source_label(self, url: str) -> str:
+        if not YouTubeInstagramMediaPipeline.is_url(url):
+            suffix = Path(url).suffix.lower()
+            if suffix in AUDIO_EXTENSIONS:
+                return "내 컴퓨터 오디오"
+            return "내 컴퓨터 영상"
         if YouTubeInstagramMediaPipeline.is_instagram_url(url):
             return "Instagram"
         if "/shorts/" in url:
@@ -1273,6 +1453,8 @@ class YouTubeInstagramMediaApp(ctk.CTk):
 
     @staticmethod
     def _compact_url(url: str, max_length: int = 58) -> str:
+        if not YouTubeInstagramMediaPipeline.is_url(url):
+            url = Path(url).name
         if len(url) <= max_length:
             return url
         return f"{url[: max_length - 3]}..."

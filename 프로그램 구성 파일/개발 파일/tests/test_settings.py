@@ -65,6 +65,7 @@ def test_save_settings_keeps_custom_output_dir(tmp_path, monkeypatch):
             capture_screenshots=True,
             audio_quality="256",
             video_quality="720",
+            cookie_file=str(tmp_path / "cookies.txt"),
         )
     )
 
@@ -77,6 +78,7 @@ def test_save_settings_keeps_custom_output_dir(tmp_path, monkeypatch):
     assert payload["capture_screenshots"] is True
     assert payload["audio_quality"] == "256"
     assert payload["video_quality"] == "720"
+    assert payload["cookie_file"] == str(tmp_path / "cookies.txt")
 
 
 def test_load_settings_disables_screenshots_without_video(tmp_path, monkeypatch):

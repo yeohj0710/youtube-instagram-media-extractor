@@ -30,6 +30,7 @@ class AppSettings:
     video_quality: str = DEFAULT_VIDEO_QUALITY
     use_browser_cookies: bool = True
     cookie_browser: str = "chrome"
+    cookie_file: str = ""
 
 
 def app_data_dir() -> Path:
@@ -126,6 +127,7 @@ def load_settings() -> AppSettings:
     settings.include_audio = bool(settings.include_audio)
     settings.capture_screenshots = bool(settings.capture_screenshots) and settings.include_video
     settings.use_browser_cookies = bool(settings.use_browser_cookies)
+    settings.cookie_file = str(settings.cookie_file or "").strip()
     return settings
 
 

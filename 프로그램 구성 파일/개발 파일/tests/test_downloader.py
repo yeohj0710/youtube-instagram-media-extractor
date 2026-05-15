@@ -20,6 +20,48 @@ def test_is_supported_url_rejects_other_hosts():
     assert not YouTubeInstagramMediaPipeline.is_supported_url("https://example.com/watch?v=abc")
 
 
+def test_local_media_detection_accepts_video_and_audio_files():
+    assert YouTubeInstagramMediaPipeline.is_supported_local_media(r"C:\media\clip.mp4")
+    assert YouTubeInstagramMediaPipeline.is_supported_local_media(r"C:\media\narration.mp3")
+    assert not YouTubeInstagramMediaPipeline.is_supported_local_media(r"C:\media\notes.txt")
+
+
+def test_chrome_cookie_specs_include_profile_directories(tmp_path: Path, monkeypatch):
+    local_appdata = tmp_path / "LocalAppData"
+    user_data = local_appdata / "Google" / "Chrome" / "User Data"
+    for profile in ("Profile 2", "Default", "Profile 1"):
+        cookies = user_data / profile / "Network" / "Cookies"
+        cookies.parent.mkdir(parents=True)
+        cookies.write_bytes(b"sqlite")
+    monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
+
+    specs = YouTubeInstagramMediaPipeline._cookie_specs_for_browser("chrome")
+
+    assert specs[:4] == [
+        ("chrome",),
+        ("chrome", "Default"),
+        ("chrome", "Profile 1"),
+        ("chrome", "Profile 2"),
+    ]
+
+
+def test_base_ytdlp_opts_prefers_cookie_file_over_browser(tmp_path: Path):
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    pipeline = YouTubeInstagramMediaPipeline(
+        AppSettings(output_dir=str(tmp_path), use_browser_cookies=True, cookie_browser="chrome", cookie_file=str(cookie_file))
+    )
+
+    opts = pipeline._base_ytdlp_opts("260512120000", tmp_path)
+
+    assert opts["cookiefile"] == str(cookie_file)
+    assert "cookiesfrombrowser" not in opts
+
+
+def test_cookie_related_decrypt_errors_trigger_cookie_retry():
+    assert YouTubeInstagramMediaPipeline._download_error_needs_cookies(RuntimeError("Failed to decrypt with DPAPI"))
+
+
 def test_sanitize_filename_removes_windows_reserved_chars():
     assert sanitize_filename('bad <title> "demo" / test?') == "bad _title_ _demo_ _ test_"
 
@@ -108,6 +150,37 @@ def test_mp4_download_puts_screenshots_in_separate_folder(tmp_path: Path, monkey
     assert screenshot_dir == (tmp_path / "Demo Video 스크린샷 추출본").resolve()
     assert (tmp_path / f"{started} Demo Video.mp4").exists()
     assert (tmp_path / "Demo Video 스크린샷 추출본" / "0001_00-00-00.jpg").exists()
+
+
+def test_local_video_reuses_screenshot_capture(tmp_path: Path, monkeypatch):
+    source = tmp_path / "local clip.mp4"
+    source.write_bytes(b"mp4")
+    output_root = tmp_path / "out"
+    pipeline = YouTubeInstagramMediaPipeline(
+        AppSettings(output_dir=str(output_root), include_video=True, include_audio=True, capture_screenshots=True)
+    )
+
+    def fake_save(source_path: Path, started: str, root: Path, title: str, include_audio: bool) -> Path:
+        assert source_path == source.resolve()
+        assert title == "local clip"
+        assert include_audio is True
+        media_path = root / f"{started} local clip.mp4"
+        media_path.write_bytes(b"mp4")
+        return media_path.resolve()
+
+    def fake_capture(_video_path: Path, screenshot_dir: Path) -> Path:
+        (screenshot_dir / "0001_00-00-00.jpg").write_bytes(b"jpg")
+        return screenshot_dir
+
+    monkeypatch.setattr(pipeline, "_save_local_video_as_mp4", fake_save)
+    monkeypatch.setattr(pipeline, "_capture_screenshots", fake_capture)
+
+    result = pipeline.run(str(source))
+
+    assert result.output_format == "MP4"
+    assert result.media_path.exists()
+    assert result.screenshot_dir == (output_root / "local clip 스크린샷 추출본").resolve()
+    assert (result.screenshot_dir / "0001_00-00-00.jpg").exists()
 
 
 def test_cleanup_extra_outputs_keeps_only_selected_file(tmp_path: Path):

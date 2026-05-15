@@ -76,6 +76,11 @@ Get-ChildItem $ProgramFilesDir -Force | ForEach-Object {
 }
 Copy-Item (Join-Path $BuiltRuntimeDir "*") $ProgramFilesDir -Recurse -Force
 
+$DownloadHelpImage = Join-Path $DevRoot "assets\github-download-zip.png"
+if (Test-Path $DownloadHelpImage) {
+    Copy-Item $DownloadHelpImage (Join-Path $ProgramFilesDir "github-download-zip.png") -Force
+}
+
 New-Item -ItemType Directory -Force -Path (Join-Path $RepoRoot $OutputDirName) | Out-Null
 
 Write-Host ""
