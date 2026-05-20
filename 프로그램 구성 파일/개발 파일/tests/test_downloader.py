@@ -213,6 +213,14 @@ def test_rename_screenshots_with_timecodes(tmp_path: Path):
     assert (tmp_path / "0002_00-00-01.jpg").exists()
 
 
+def test_ffmpeg_image_sequence_pattern_escapes_literal_percent_in_path():
+    pattern = Path(r"G:\내 드라이브\영상 편집\100% 마그네슘\__screenshot_%05d.jpg")
+
+    escaped = YouTubeInstagramMediaPipeline._ffmpeg_image_sequence_pattern(pattern)
+
+    assert escaped == r"G:\내 드라이브\영상 편집\100%% 마그네슘\__screenshot_%05d.jpg"
+
+
 def test_media_mode_follows_video_and_audio_flags():
     assert YouTubeInstagramMediaPipeline(AppSettings(include_video=True, include_audio=True))._media_mode() == MEDIA_VIDEO_AUDIO
     assert YouTubeInstagramMediaPipeline(AppSettings(include_video=True, include_audio=False))._media_mode() == MEDIA_VIDEO_ONLY

@@ -747,7 +747,7 @@ class YouTubeInstagramMediaPipeline:
         except Exception:
             pass
 
-        output_pattern = output_dir / "__screenshot_%05d.jpg"
+        output_pattern = self._ffmpeg_image_sequence_pattern(output_dir / "__screenshot_%05d.jpg")
         completed = run_process(
             [
                 self.ffmpeg,
@@ -775,6 +775,21 @@ class YouTubeInstagramMediaPipeline:
         else:
             self.progress("스크린샷 캡처 완료", 0.98, f"총 {capture_count}장 캡처했습니다.")
         return output_dir
+
+    @staticmethod
+    def _ffmpeg_image_sequence_pattern(pattern: Path) -> str:
+        text = str(pattern)
+        protected_patterns: list[str] = []
+
+        def protect(match: re.Match[str]) -> str:
+            protected_patterns.append(match.group(0))
+            return f"__FFMPEG_IMAGE_PATTERN_{len(protected_patterns) - 1}__"
+
+        text = re.sub(r"%0?\d*d", protect, text)
+        text = text.replace("%", "%%")
+        for index, protected_pattern in enumerate(protected_patterns):
+            text = text.replace(f"__FFMPEG_IMAGE_PATTERN_{index}__", protected_pattern)
+        return text
 
     @staticmethod
     def _rename_screenshots_with_timecodes(paths: list[Path]) -> None:
