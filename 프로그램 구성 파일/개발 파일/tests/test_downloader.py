@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from youtube_instagram_media_extractor import utils as utils_module
 from youtube_instagram_media_extractor.downloader import MEDIA_AUDIO_ONLY, MEDIA_VIDEO_AUDIO, MEDIA_VIDEO_ONLY, YouTubeInstagramMediaPipeline, unique_dir, unique_path
 from youtube_instagram_media_extractor.settings import AppSettings
-from youtube_instagram_media_extractor.utils import sanitize_filename
+from youtube_instagram_media_extractor.utils import find_ffmpeg, sanitize_filename
 
 
 def test_is_supported_url_accepts_youtube_and_instagram_hosts():
@@ -24,6 +25,16 @@ def test_local_media_detection_accepts_video_and_audio_files():
     assert YouTubeInstagramMediaPipeline.is_supported_local_media(r"C:\media\clip.mp4")
     assert YouTubeInstagramMediaPipeline.is_supported_local_media(r"C:\media\narration.mp3")
     assert not YouTubeInstagramMediaPipeline.is_supported_local_media(r"C:\media\notes.txt")
+
+
+def test_find_ffmpeg_checks_bundled_pyinstaller_directory(tmp_path: Path, monkeypatch):
+    bundled = tmp_path / "imageio_ffmpeg" / "binaries" / "ffmpeg-win-x86_64-v7.1.exe"
+    bundled.parent.mkdir(parents=True)
+    bundled.write_bytes(b"ffmpeg")
+    monkeypatch.delenv("FFMPEG_BINARY", raising=False)
+    monkeypatch.setattr(utils_module.sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    assert find_ffmpeg() == bundled.resolve()
 
 
 def test_chrome_cookie_specs_include_profile_directories(tmp_path: Path, monkeypatch):
