@@ -8,24 +8,36 @@ $OutputDirName = (-join ([char[]](0xB2E4, 0xC6B4, 0xB85C, 0xB4DC, 0xD55C))) + " 
 $ExeBaseName = "YouTube" + ([char]0x00B7) + "Instagram " + (-join ([char[]](0xBBF8, 0xB514, 0xC5B4))) + " " + (-join ([char[]](0xCD94, 0xCD9C, 0xAE30)))
 $ExeFileName = $ExeBaseName + ".exe"
 
-Set-Location $DevRoot
+Set-Location -LiteralPath $DevRoot
 
-if (-not (Test-Path ".venv")) {
+if (-not (Test-Path -LiteralPath ".venv")) {
     python -m venv .venv
 }
 
-& ".\.venv\Scripts\python.exe" -m pip install --upgrade pip
-& ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt pytest
-& ".\.venv\Scripts\python.exe" -m pytest
+function Invoke-Python {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
 
-if (Test-Path "build") {
+    & ".\.venv\Scripts\python.exe" @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python command failed with exit code ${LASTEXITCODE}: python $($Arguments -join ' ')"
+    }
+}
+
+Invoke-Python -m pip install --upgrade --ignore-installed --no-deps pip
+Invoke-Python -m pip install -r requirements.txt pytest
+Invoke-Python -m pytest
+
+if (Test-Path -LiteralPath "build") {
     Remove-Item -LiteralPath "build" -Recurse -Force
 }
-if (Test-Path "dist") {
+if (Test-Path -LiteralPath "dist") {
     Remove-Item -LiteralPath "dist" -Recurse -Force
 }
 
-& ".\.venv\Scripts\python.exe" -m PyInstaller `
+Invoke-Python -m PyInstaller `
     --noconfirm `
     --clean `
     --onedir `
@@ -44,10 +56,10 @@ $BuiltAppDir = Join-Path $DevRoot ("dist\" + $ExeBaseName)
 $BuiltExe = Join-Path $BuiltAppDir $ExeFileName
 $BuiltRuntimeDir = Join-Path $BuiltAppDir $ProgramDirName
 
-if (-not (Test-Path $BuiltExe)) {
+if (-not (Test-Path -LiteralPath $BuiltExe)) {
     throw "Built exe was not found: $BuiltExe"
 }
-if (-not (Test-Path $BuiltRuntimeDir)) {
+if (-not (Test-Path -LiteralPath $BuiltRuntimeDir)) {
     throw "Built runtime folder was not found: $BuiltRuntimeDir"
 }
 
@@ -60,28 +72,28 @@ $OldExeNames = @(
 )
 foreach ($OldExeName in $OldExeNames) {
     $OldExe = Join-Path $RepoRoot $OldExeName
-    if (Test-Path $OldExe) {
+    if (Test-Path -LiteralPath $OldExe) {
         Remove-Item -LiteralPath $OldExe -Force
     }
 }
-Copy-Item $BuiltExe (Join-Path $RepoRoot $ExeFileName) -Force
+Copy-Item -LiteralPath $BuiltExe -Destination (Join-Path $RepoRoot $ExeFileName) -Force
 
-New-Item -ItemType Directory -Force -Path $ProgramFilesDir | Out-Null
-$DevRootResolved = (Resolve-Path $DevRoot).Path
-Get-ChildItem $ProgramFilesDir -Force | ForEach-Object {
-    $ItemPath = (Resolve-Path $_.FullName).Path
+[System.IO.Directory]::CreateDirectory($ProgramFilesDir) | Out-Null
+$DevRootResolved = (Resolve-Path -LiteralPath $DevRoot).Path
+Get-ChildItem -LiteralPath $ProgramFilesDir -Force | ForEach-Object {
+    $ItemPath = (Resolve-Path -LiteralPath $_.FullName).Path
     if ($ItemPath -ne $DevRootResolved) {
         Remove-Item -LiteralPath $_.FullName -Recurse -Force
     }
 }
-Copy-Item (Join-Path $BuiltRuntimeDir "*") $ProgramFilesDir -Recurse -Force
+Get-ChildItem -LiteralPath $BuiltRuntimeDir -Force | Copy-Item -Destination $ProgramFilesDir -Recurse -Force
 
 $DownloadHelpImage = Join-Path $DevRoot "assets\github-download-zip.png"
-if (Test-Path $DownloadHelpImage) {
-    Copy-Item $DownloadHelpImage (Join-Path $ProgramFilesDir "github-download-zip.png") -Force
+if (Test-Path -LiteralPath $DownloadHelpImage) {
+    Copy-Item -LiteralPath $DownloadHelpImage -Destination (Join-Path $ProgramFilesDir "github-download-zip.png") -Force
 }
 
-New-Item -ItemType Directory -Force -Path (Join-Path $RepoRoot $OutputDirName) | Out-Null
+[System.IO.Directory]::CreateDirectory((Join-Path $RepoRoot $OutputDirName)) | Out-Null
 
 Write-Host ""
 Write-Host "Done:"

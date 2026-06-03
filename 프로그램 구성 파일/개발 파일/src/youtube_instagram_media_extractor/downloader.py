@@ -502,8 +502,6 @@ class YouTubeInstagramMediaPipeline:
         cookie_file = self._cookie_file_path()
         if cookie_file is not None:
             opts["cookiefile"] = str(cookie_file)
-        elif self.settings.use_browser_cookies:
-            opts["cookiesfrombrowser"] = self._default_cookie_browser_spec()
         return opts
 
     def _extract_with_ytdlp(self, yt_dlp_module: object, url: str, ydl_opts: dict[str, object]) -> dict[str, object]:
@@ -512,7 +510,11 @@ class YouTubeInstagramMediaPipeline:
         except UserFacingError:
             raise
         except Exception as exc:
+            if self._download_error_is_terminal_unavailable(exc):
+                raise self._friendly_download_error(exc) from exc
             if not self._download_error_needs_cookies(exc):
+                raise self._friendly_download_error(exc) from exc
+            if not self.settings.use_browser_cookies:
                 raise self._friendly_download_error(exc) from exc
 
             self.progress(
@@ -561,9 +563,28 @@ class YouTubeInstagramMediaPipeline:
             except Exception as exc:
                 last_error = exc
                 self.progress("다른 브라우저 확인 중", 0.12, f"{label} 쿠키 실패: {self._brief_error(exc)}")
+                if self._download_error_is_terminal_unavailable(exc):
+                    raise exc
         if last_error is not None:
             raise last_error
         raise RuntimeError("사용 가능한 브라우저 쿠키 후보가 없습니다.")
+
+    @staticmethod
+    def _download_error_is_terminal_unavailable(error: BaseException) -> bool:
+        lowered = str(error).lower()
+        return any(
+            phrase in lowered
+            for phrase in (
+                "this video is not available",
+                "this video is unavailable",
+                "video unavailable",
+                "has been removed",
+                "has been deleted",
+                "no longer available",
+                "video does not exist",
+                "account associated with this video has been terminated",
+            )
+        )
 
     @staticmethod
     def _download_error_needs_cookies(error: BaseException) -> bool:
@@ -576,8 +597,6 @@ class YouTubeInstagramMediaPipeline:
                 "cookies",
                 "cookie",
                 "rate-limit",
-                "requested content is not available",
-                "not available",
                 "for authentication",
                 "private",
                 "decrypt",
@@ -747,7 +766,7 @@ class YouTubeInstagramMediaPipeline:
         except Exception:
             pass
 
-        output_pattern = self._ffmpeg_image_sequence_pattern(output_dir / "__screenshot_%05d.jpg")
+        output_pattern = output_dir / "__screenshot_%05d.jpg"
         completed = run_process(
             [
                 self.ffmpeg,
@@ -775,21 +794,6 @@ class YouTubeInstagramMediaPipeline:
         else:
             self.progress("스크린샷 캡처 완료", 0.98, f"총 {capture_count}장 캡처했습니다.")
         return output_dir
-
-    @staticmethod
-    def _ffmpeg_image_sequence_pattern(pattern: Path) -> str:
-        text = str(pattern)
-        protected_patterns: list[str] = []
-
-        def protect(match: re.Match[str]) -> str:
-            protected_patterns.append(match.group(0))
-            return f"__FFMPEG_IMAGE_PATTERN_{len(protected_patterns) - 1}__"
-
-        text = re.sub(r"%0?\d*d", protect, text)
-        text = text.replace("%", "%%")
-        for index, protected_pattern in enumerate(protected_patterns):
-            text = text.replace(f"__FFMPEG_IMAGE_PATTERN_{index}__", protected_pattern)
-        return text
 
     @staticmethod
     def _rename_screenshots_with_timecodes(paths: list[Path]) -> None:
@@ -931,6 +935,13 @@ class YouTubeInstagramMediaPipeline:
             )
 
         lowered = str(error).lower()
+        if self._download_error_is_terminal_unavailable(error):
+            extra = " 브라우저 쿠키로도 접근할 수 없습니다." if retried_with_cookies else ""
+            return UserFacingError(
+                f"YouTube에서 이 {media_word} 다운로드하지 못했습니다.\n\n"
+                f"YouTube가 이 영상을 사용할 수 없다고 응답했습니다.{extra} "
+                "영상이 삭제되었거나, 비공개/지역 제한/권한 제한 상태일 수 있습니다. 브라우저에서 영상이 정상 재생되는지 확인해 주세요."
+            )
         if "private" in lowered or "sign in" in lowered or "login" in lowered:
             return UserFacingError(
                 f"YouTube에서 이 {media_word} 바로 다운로드하지 못했습니다.\n\n"

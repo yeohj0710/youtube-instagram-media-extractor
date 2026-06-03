@@ -58,8 +58,56 @@ def test_base_ytdlp_opts_prefers_cookie_file_over_browser(tmp_path: Path):
     assert "cookiesfrombrowser" not in opts
 
 
+def test_base_ytdlp_opts_skips_browser_cookies_on_first_attempt(tmp_path: Path):
+    pipeline = YouTubeInstagramMediaPipeline(
+        AppSettings(output_dir=str(tmp_path), use_browser_cookies=True, cookie_browser="chrome")
+    )
+
+    opts = pipeline._base_ytdlp_opts("260512120000", tmp_path)
+
+    assert "cookiesfrombrowser" not in opts
+
+
 def test_cookie_related_decrypt_errors_trigger_cookie_retry():
     assert YouTubeInstagramMediaPipeline._download_error_needs_cookies(RuntimeError("Failed to decrypt with DPAPI"))
+
+
+def test_youtube_not_available_does_not_trigger_cookie_retry():
+    error = RuntimeError("[youtube] YI6jq4Yzhtc: This video is not available")
+
+    assert YouTubeInstagramMediaPipeline._download_error_is_terminal_unavailable(error)
+    assert not YouTubeInstagramMediaPipeline._download_error_needs_cookies(error)
+
+
+def test_browser_cookie_fallback_stops_on_terminal_youtube_unavailable(tmp_path: Path, monkeypatch):
+    pipeline = YouTubeInstagramMediaPipeline(AppSettings(output_dir=str(tmp_path), use_browser_cookies=True))
+    pipeline.active_url = "https://www.youtube.com/watch?v=YI6jq4Yzhtc"
+    attempts: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        pipeline,
+        "_cookie_browser_specs",
+        lambda: [("chrome",), ("chrome", "Guest Profile"), ("edge",)],
+    )
+
+    def fake_extract_once(_yt_dlp_module: object, _url: str, opts: dict[str, object]) -> dict[str, object]:
+        spec = opts["cookiesfrombrowser"]
+        assert isinstance(spec, tuple)
+        attempts.append(spec)
+        if spec == ("chrome",):
+            raise RuntimeError("Could not copy Chrome cookie database")
+        raise RuntimeError("[youtube] YI6jq4Yzhtc: This video is not available")
+
+    monkeypatch.setattr(pipeline, "_extract_once", fake_extract_once)
+
+    try:
+        pipeline._extract_with_browser_cookie_fallback(object(), pipeline.active_url, {})
+    except RuntimeError as exc:
+        assert "This video is not available" in str(exc)
+    else:
+        raise AssertionError("terminal unavailable errors should stop cookie fallback")
+
+    assert attempts == [("chrome",), ("chrome", "Guest Profile")]
 
 
 def test_sanitize_filename_removes_windows_reserved_chars():
@@ -211,14 +259,6 @@ def test_rename_screenshots_with_timecodes(tmp_path: Path):
 
     assert (tmp_path / "0001_00-00-00.jpg").exists()
     assert (tmp_path / "0002_00-00-01.jpg").exists()
-
-
-def test_ffmpeg_image_sequence_pattern_escapes_literal_percent_in_path():
-    pattern = Path(r"G:\내 드라이브\영상 편집\100% 마그네슘\__screenshot_%05d.jpg")
-
-    escaped = YouTubeInstagramMediaPipeline._ffmpeg_image_sequence_pattern(pattern)
-
-    assert escaped == r"G:\내 드라이브\영상 편집\100%% 마그네슘\__screenshot_%05d.jpg"
 
 
 def test_media_mode_follows_video_and_audio_flags():
