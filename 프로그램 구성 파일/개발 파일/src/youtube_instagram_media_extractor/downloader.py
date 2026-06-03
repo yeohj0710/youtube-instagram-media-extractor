@@ -510,10 +510,22 @@ class YouTubeInstagramMediaPipeline:
         except UserFacingError:
             raise
         except Exception as exc:
-            if self._download_error_is_terminal_unavailable(exc):
-                raise self._friendly_download_error(exc) from exc
+            if self.is_youtube_url(url) and self._download_error_is_terminal_unavailable(exc):
+                try:
+                    self.progress(
+                        "YouTube 웹 방식 재시도 중",
+                        0.10,
+                        "브라우저에서는 재생되는 영상일 수 있어 YouTube 웹 클라이언트로 다시 확인합니다.",
+                    )
+                    return self._extract_once(yt_dlp_module, url, self._youtube_web_client_opts(ydl_opts))
+                except Exception as web_exc:
+                    exc = web_exc
+
             if not self._download_error_needs_cookies(exc):
-                raise self._friendly_download_error(exc) from exc
+                if self._download_error_is_terminal_unavailable(exc) and self.settings.use_browser_cookies:
+                    pass
+                else:
+                    raise self._friendly_download_error(exc) from exc
             if not self.settings.use_browser_cookies:
                 raise self._friendly_download_error(exc) from exc
 
@@ -563,11 +575,21 @@ class YouTubeInstagramMediaPipeline:
             except Exception as exc:
                 last_error = exc
                 self.progress("다른 브라우저 확인 중", 0.12, f"{label} 쿠키 실패: {self._brief_error(exc)}")
-                if self._download_error_is_terminal_unavailable(exc):
-                    raise exc
         if last_error is not None:
             raise last_error
         raise RuntimeError("사용 가능한 브라우저 쿠키 후보가 없습니다.")
+
+    @staticmethod
+    def _youtube_web_client_opts(base_opts: dict[str, object]) -> dict[str, object]:
+        opts = dict(base_opts)
+        extractor_args = dict(opts.get("extractor_args") or {})
+        youtube_args = dict(extractor_args.get("youtube") or {})
+        youtube_args["player_client"] = ["web"]
+        extractor_args["youtube"] = youtube_args
+        opts["extractor_args"] = extractor_args
+        opts["js_runtimes"] = {"node": {}}
+        opts["remote_components"] = ["ejs:github"]
+        return opts
 
     @staticmethod
     def _download_error_is_terminal_unavailable(error: BaseException) -> bool:

@@ -72,14 +72,34 @@ def test_cookie_related_decrypt_errors_trigger_cookie_retry():
     assert YouTubeInstagramMediaPipeline._download_error_needs_cookies(RuntimeError("Failed to decrypt with DPAPI"))
 
 
-def test_youtube_not_available_does_not_trigger_cookie_retry():
+def test_youtube_not_available_is_detected_for_web_retry():
     error = RuntimeError("[youtube] YI6jq4Yzhtc: This video is not available")
 
     assert YouTubeInstagramMediaPipeline._download_error_is_terminal_unavailable(error)
-    assert not YouTubeInstagramMediaPipeline._download_error_needs_cookies(error)
 
 
-def test_browser_cookie_fallback_stops_on_terminal_youtube_unavailable(tmp_path: Path, monkeypatch):
+def test_youtube_unavailable_retries_with_web_client(tmp_path: Path, monkeypatch):
+    pipeline = YouTubeInstagramMediaPipeline(AppSettings(output_dir=str(tmp_path), use_browser_cookies=True))
+    attempts: list[dict[str, object]] = []
+
+    def fake_extract_once(_yt_dlp_module: object, _url: str, opts: dict[str, object]) -> dict[str, object]:
+        attempts.append(opts)
+        if len(attempts) == 1:
+            raise RuntimeError("[youtube] YI6jq4Yzhtc: This video is not available")
+        return {"title": "CINEMATIC BOOM"}
+
+    monkeypatch.setattr(pipeline, "_extract_once", fake_extract_once)
+
+    info = pipeline._extract_with_ytdlp(object(), "https://www.youtube.com/watch?v=YI6jq4Yzhtc", {})
+
+    assert info == {"title": "CINEMATIC BOOM"}
+    assert attempts[0] == {}
+    assert attempts[1]["extractor_args"] == {"youtube": {"player_client": ["web"]}}
+    assert attempts[1]["js_runtimes"] == {"node": {}}
+    assert attempts[1]["remote_components"] == ["ejs:github"]
+
+
+def test_browser_cookie_fallback_keeps_trying_after_youtube_unavailable(tmp_path: Path, monkeypatch):
     pipeline = YouTubeInstagramMediaPipeline(AppSettings(output_dir=str(tmp_path), use_browser_cookies=True))
     pipeline.active_url = "https://www.youtube.com/watch?v=YI6jq4Yzhtc"
     attempts: list[tuple[str, ...]] = []
@@ -96,18 +116,16 @@ def test_browser_cookie_fallback_stops_on_terminal_youtube_unavailable(tmp_path:
         attempts.append(spec)
         if spec == ("chrome",):
             raise RuntimeError("Could not copy Chrome cookie database")
-        raise RuntimeError("[youtube] YI6jq4Yzhtc: This video is not available")
+        if spec == ("chrome", "Guest Profile"):
+            raise RuntimeError("[youtube] YI6jq4Yzhtc: This video is not available")
+        return {"title": "CINEMATIC BOOM"}
 
     monkeypatch.setattr(pipeline, "_extract_once", fake_extract_once)
 
-    try:
-        pipeline._extract_with_browser_cookie_fallback(object(), pipeline.active_url, {})
-    except RuntimeError as exc:
-        assert "This video is not available" in str(exc)
-    else:
-        raise AssertionError("terminal unavailable errors should stop cookie fallback")
+    info = pipeline._extract_with_browser_cookie_fallback(object(), pipeline.active_url, {})
 
-    assert attempts == [("chrome",), ("chrome", "Guest Profile")]
+    assert info == {"title": "CINEMATIC BOOM"}
+    assert attempts == [("chrome",), ("chrome", "Guest Profile"), ("edge",)]
 
 
 def test_sanitize_filename_removes_windows_reserved_chars():
