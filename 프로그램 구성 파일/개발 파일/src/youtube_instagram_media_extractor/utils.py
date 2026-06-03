@@ -61,8 +61,14 @@ def _drop_unclosed_tail(value: str, opener: str, closer: str) -> str:
 
 def find_ffmpeg() -> Path:
     env_path = os.getenv("FFMPEG_BINARY")
-    if env_path and Path(env_path).exists():
-        return Path(env_path)
+    if env_path:
+        configured = _find_existing_ffmpeg_path(Path(env_path).expanduser())
+        if configured is not None:
+            return configured
+
+    for bundled in _bundled_ffmpeg_candidates():
+        if bundled.exists() and bundled.is_file():
+            return bundled.resolve()
 
     try:
         import imageio_ffmpeg
@@ -77,6 +83,48 @@ def find_ffmpeg() -> Path:
     if found:
         return Path(found)
     raise RuntimeError("FFmpeg을 찾을 수 없습니다. ffmpeg 설치 또는 재빌드가 필요합니다.")
+
+
+def _find_existing_ffmpeg_path(path: Path) -> Path | None:
+    if path.exists() and path.is_file():
+        return path.resolve()
+    if path.exists() and path.is_dir():
+        for candidate in _ffmpeg_candidates_in_dir(path):
+            if candidate.exists() and candidate.is_file():
+                return candidate.resolve()
+    return None
+
+
+def _bundled_ffmpeg_candidates() -> list[Path]:
+    roots = [
+        Path(getattr(sys, "_MEIPASS", "")),
+        Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(),
+        resource_path(),
+        Path(__file__).resolve().parents[2],
+    ]
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not root:
+            continue
+        for directory in (
+            root,
+            root / "imageio_ffmpeg" / "binaries",
+            root / "binaries",
+        ):
+            for candidate in _ffmpeg_candidates_in_dir(directory):
+                key = os.path.normcase(str(candidate))
+                if key not in seen:
+                    candidates.append(candidate)
+                    seen.add(key)
+    return candidates
+
+
+def _ffmpeg_candidates_in_dir(directory: Path) -> list[Path]:
+    if not directory.exists() or not directory.is_dir():
+        return [directory / "ffmpeg.exe"]
+    direct = [directory / "ffmpeg.exe"]
+    return direct + sorted(directory.glob("ffmpeg*.exe"))
 
 
 def run_process(args: list[str | os.PathLike[str]], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
