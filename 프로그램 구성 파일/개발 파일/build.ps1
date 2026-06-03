@@ -3,6 +3,8 @@ $ErrorActionPreference = "Stop"
 $DevRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProgramFilesDir = Split-Path -Parent $DevRoot
 $RepoRoot = Split-Path -Parent $ProgramFilesDir
+$BuildDir = Join-Path $DevRoot "build"
+$DistDir = Join-Path $DevRoot "dist"
 $ProgramDirName = -join ([char[]](0xD504, 0xB85C, 0xADF8, 0xB7A8, 0x20, 0xAD6C, 0xC131, 0x20, 0xD30C, 0xC77C))
 $OutputDirName = (-join ([char[]](0xB2E4, 0xC6B4, 0xB85C, 0xB4DC, 0xD55C))) + " " + (-join ([char[]](0xBBF8, 0xB514, 0xC5B4)))
 $ExeBaseName = "YouTube" + ([char]0x00B7) + "Instagram " + (-join ([char[]](0xBBF8, 0xB514, 0xC5B4))) + " " + (-join ([char[]](0xCD94, 0xCD9C, 0xAE30)))
@@ -26,29 +28,60 @@ function Invoke-Python {
     }
 }
 
+function Invoke-PythonOutput {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
+
+    $Output = & ".\.venv\Scripts\python.exe" @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python command failed with exit code ${LASTEXITCODE}: python $($Arguments -join ' ')"
+    }
+    return ($Output -join "`n").Trim()
+}
+
 Invoke-Python -m pip install --upgrade --ignore-installed --no-deps pip
 Invoke-Python -m pip install -r requirements.txt pytest
 Invoke-Python -m pytest
 
-if (Test-Path -LiteralPath "build") {
-    Remove-Item -LiteralPath "build" -Recurse -Force
+if (Test-Path -LiteralPath $BuildDir) {
+    Remove-Item -LiteralPath $BuildDir -Recurse -Force
 }
-if (Test-Path -LiteralPath "dist") {
-    Remove-Item -LiteralPath "dist" -Recurse -Force
+if (Test-Path -LiteralPath $DistDir) {
+    Remove-Item -LiteralPath $DistDir -Recurse -Force
+}
+
+$PythonTclRoot = Invoke-PythonOutput -c "import sys; from pathlib import Path; print(Path(sys.base_prefix) / 'tcl')"
+$TclDataDir = Join-Path $PythonTclRoot "tcl8.6"
+$TkDataDir = Join-Path $PythonTclRoot "tk8.6"
+$TclModulesDir = Join-Path $PythonTclRoot "tcl8"
+foreach ($RequiredDir in @($TclDataDir, $TkDataDir, $TclModulesDir)) {
+    if (-not (Test-Path -LiteralPath $RequiredDir)) {
+        throw "Required Tcl/Tk data directory was not found: $RequiredDir"
+    }
 }
 
 Invoke-Python -m PyInstaller `
     --noconfirm `
     --clean `
+    --noupx `
     --onedir `
     --windowed `
+    --workpath $BuildDir `
+    --distpath $DistDir `
+    --specpath $DevRoot `
     --name $ExeBaseName `
     --icon "assets\youtube-instagram-media.ico" `
     --contents-directory $ProgramDirName `
     --add-data "assets\youtube-instagram-media.ico;assets" `
     --add-data "assets\youtube-instagram-media.png;assets" `
+    --add-data "$TclDataDir;_tcl_data" `
+    --add-data "$TkDataDir;_tk_data" `
+    --add-data "$TclModulesDir;tcl8" `
     --collect-all customtkinter `
     --collect-binaries imageio_ffmpeg `
+    --hidden-import ctypes._layout `
     --hidden-import yt_dlp `
     "src\youtube_instagram_media_extractor\__main__.py"
 
